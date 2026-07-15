@@ -1,0 +1,31 @@
+[package]
+name = "chat-server-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+chat-foundation-common.workspace = true
+chat-foundation-errors.workspace = true
+chat-foundation-config.workspace = true
+chat-foundation-telemetry.workspace = true
+chat-protocol-core.workspace = true
+chat-protocol-cell.workspace = true
+chat-protocol-control.workspace = true
+chat-protocol-envelope.workspace = true
+chat-protocol-object.workspace = true
+chat-crypto-api.workspace = true
+chat-privacy-core.workspace = true
+chat-transport-core.workspace = true
+chat-storage-core.workspace = true
+anyhow.workspace = true
+axum.workspace = true
+dotenvy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

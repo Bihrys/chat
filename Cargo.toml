@@ -1,0 +1,163 @@
+[workspace]
+resolver = "3"
+
+members = [
+    "crates/*/*",
+    "services/*",
+    "tools/*",
+]
+
+# Desktop Tauri shells are intentionally standalone packages. This keeps
+# `cargo check --workspace` platform-neutral while still allowing them to
+# depend on the shared workspace crates by path.
+exclude = [
+    "frontends/linux/native",
+    "frontends/windows/native",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.0"
+publish = false
+
+[workspace.dependencies]
+# -----------------------------------------------------------------------------
+# Internal workspace crates
+# -----------------------------------------------------------------------------
+chat-foundation-common = { path = "crates/foundation/common" }
+chat-foundation-errors = { path = "crates/foundation/errors" }
+chat-foundation-config = { path = "crates/foundation/config" }
+chat-foundation-telemetry = { path = "crates/foundation/telemetry" }
+chat-protocol-core = { path = "crates/protocol/core" }
+chat-protocol-cell = { path = "crates/protocol/cell" }
+chat-protocol-control = { path = "crates/protocol/control" }
+chat-protocol-envelope = { path = "crates/protocol/envelope" }
+chat-protocol-object = { path = "crates/protocol/object" }
+chat-crypto-api = { path = "crates/crypto/api" }
+chat-crypto-core = { path = "crates/crypto/core" }
+chat-crypto-pairwise-provider = { path = "crates/crypto/pairwise-provider" }
+chat-crypto-mls-provider = { path = "crates/crypto/mls-provider" }
+chat-crypto-opaque-provider = { path = "crates/crypto/opaque-provider" }
+chat-crypto-key-transparency-provider = { path = "crates/crypto/key-transparency-provider" }
+chat-privacy-core = { path = "crates/privacy/core" }
+chat-privacy-metadata = { path = "crates/privacy/metadata" }
+chat-privacy-padding = { path = "crates/privacy/padding" }
+chat-privacy-sender-hiding = { path = "crates/privacy/sender-hiding" }
+chat-privacy-strong-traffic = { path = "crates/privacy/strong-traffic" }
+chat-transport-core = { path = "crates/transport/core" }
+chat-transport-quic = { path = "crates/transport/quic" }
+chat-transport-ohttp = { path = "crates/transport/ohttp" }
+chat-transport-tunnel = { path = "crates/transport/tunnel" }
+chat-storage-core = { path = "crates/storage/core" }
+chat-storage-client = { path = "crates/storage/client" }
+chat-storage-server = { path = "crates/storage/server" }
+chat-client-core = { path = "crates/client/core" }
+chat-client-facade = { path = "crates/client/facade" }
+chat-server-core = { path = "crates/server/core" }
+chat-platform-api = { path = "crates/platform/api" }
+chat-platform-linux = { path = "crates/platform/linux" }
+chat-platform-windows = { path = "crates/platform/windows" }
+chat-platform-android = { path = "crates/platform/android" }
+chat-ffi-android = { path = "crates/ffi/android" }
+chat-backup-core = { path = "crates/backup/core" }
+chat-media-call-core = { path = "crates/media/call-core" }
+chat-media-sframe = { path = "crates/media/sframe" }
+chat-testing-test-support = { path = "crates/testing/test-support" }
+
+# -----------------------------------------------------------------------------
+# Error handling
+# -----------------------------------------------------------------------------
+anyhow = "1"
+thiserror = "2"
+
+# -----------------------------------------------------------------------------
+# Async / concurrency
+# -----------------------------------------------------------------------------
+async-trait = "0.1"
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "signal",
+    "sync",
+    "time",
+    "net",
+    "fs",
+    "process",
+] }
+
+# -----------------------------------------------------------------------------
+# Serialization / data
+# -----------------------------------------------------------------------------
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1"
+bytes = "1"
+uuid = { version = "1", features = ["v4", "v7", "serde"] }
+time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }
+
+# -----------------------------------------------------------------------------
+# Configuration / observability
+# -----------------------------------------------------------------------------
+dotenvy = "0.15"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+
+# -----------------------------------------------------------------------------
+# HTTP server
+# -----------------------------------------------------------------------------
+http = "1"
+axum = "0.8"
+
+# -----------------------------------------------------------------------------
+# PostgreSQL
+# -----------------------------------------------------------------------------
+sqlx = { version = "0.9", default-features = false, features = [
+    "runtime-tokio",
+    "postgres",
+    "uuid",
+    "time",
+    "migrate",
+] }
+
+# -----------------------------------------------------------------------------
+# Valkey through the Redis-compatible RESP protocol
+# -----------------------------------------------------------------------------
+redis = { version = "1.4", default-features = false, features = [
+    "tokio-comp",
+    "connection-manager",
+] }
+
+# -----------------------------------------------------------------------------
+# Sensitive-memory foundations
+# -----------------------------------------------------------------------------
+zeroize = { version = "1", features = ["derive"] }
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+unused_must_use = "deny"
+
+[workspace.lints.clippy]
+all = "warn"
+pedantic = "warn"
+nursery = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+
+[profile.dev]
+debug = 1
+incremental = false
+
+[profile.test]
+debug = 1
+incremental = false
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1

@@ -1,0 +1,20 @@
+[package]
+name = "chat-linux-desktop"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.96.0"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chat-client-facade = { path = "../../../crates/client/facade" }
+chat-platform-linux = { path = "../../../crates/platform/linux" }
+
+[lib]
+name = "chat_desktop"
+path = "src/lib.rs"

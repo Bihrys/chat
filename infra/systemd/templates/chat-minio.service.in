@@ -1,0 +1,13 @@
+[Unit]
+Description=Chat local MinIO
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/infrastructure/minio/start.sh
+ExecStop=@ROOT@/scripts/infrastructure/minio/stop.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=chat-infrastructure.target

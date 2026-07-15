@@ -1,0 +1,4 @@
+# Project-wide Clippy configuration.
+#
+# Detailed lint policy is defined in the root Cargo.toml.
+# Security-critical crates may introduce stricter crate-local rules later.

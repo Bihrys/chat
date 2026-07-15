@@ -1,0 +1,698 @@
+.
+├── benches
+│   ├── cell
+│   ├── crypto
+│   ├── end-to-end
+│   ├── padding
+│   ├── protocol
+│   ├── storage
+│   ├── strong-traffic
+│   └── transport
+├── contracts
+│   ├── fixtures
+│   │   ├── accounts
+│   │   ├── conversations
+│   │   ├── devices
+│   │   ├── groups
+│   │   └── objects
+│   ├── proto
+│   │   ├── events
+│   │   │   └── v1
+│   │   ├── internal
+│   │   │   └── v1
+│   │   ├── local
+│   │   │   └── v1
+│   │   └── public
+│   │       └── v1
+│   ├── schema
+│   │   ├── json
+│   │   └── sql
+│   └── test-vectors
+│       ├── cell-v1
+│       ├── crypto
+│       ├── envelope-v1
+│       ├── mls
+│       ├── object-v1
+│       ├── padding-v1
+│       └── transport
+├── crates
+│   ├── backup
+│   │   └── core
+│   │       └── src
+│   │           ├── archive
+│   │           ├── encryption
+│   │           ├── migration
+│   │           ├── recovery-key
+│   │           └── restore
+│   ├── client
+│   │   ├── core
+│   │   │   └── src
+│   │   │       ├── attachment
+│   │   │       ├── auth
+│   │   │       ├── backup
+│   │   │       ├── call
+│   │   │       ├── contacts
+│   │   │       ├── device
+│   │   │       ├── group
+│   │   │       ├── identity
+│   │   │       ├── messaging
+│   │   │       ├── migration
+│   │   │       ├── notification
+│   │   │       ├── profile
+│   │   │       ├── security
+│   │   │       ├── session
+│   │   │       └── state
+│   │   └── facade
+│   │       └── src
+│   │           ├── commands
+│   │           ├── dto
+│   │           └── events
+│   ├── crypto
+│   │   ├── api
+│   │   │   └── src
+│   │   │       ├── auth
+│   │   │       ├── group
+│   │   │       ├── pairwise
+│   │   │       └── transparency
+│   │   ├── core
+│   │   │   └── src
+│   │   │       ├── aead
+│   │   │       ├── attachment
+│   │   │       ├── hpke
+│   │   │       ├── kdf
+│   │   │       ├── key-domain
+│   │   │       ├── key-lifecycle
+│   │   │       ├── nonce
+│   │   │       ├── object
+│   │   │       ├── random
+│   │   │       └── secure-memory
+│   │   ├── key-transparency-provider
+│   │   │   └── src
+│   │   │       ├── adapter
+│   │   │       ├── checkpoint
+│   │   │       ├── consistency
+│   │   │       └── proof
+│   │   ├── mls-provider
+│   │   │   └── src
+│   │   │       ├── adapter
+│   │   │       ├── epoch
+│   │   │       ├── group
+│   │   │       └── key-package
+│   │   ├── opaque-provider
+│   │   │   └── src
+│   │   │       ├── adapter
+│   │   │       ├── login
+│   │   │       └── registration
+│   │   └── pairwise-provider
+│   │       └── src
+│   │           ├── adapter
+│   │           ├── identity
+│   │           ├── prekey
+│   │           ├── ratchet
+│   │           └── session
+│   ├── ffi
+│   │   └── android
+│   │       └── src
+│   ├── foundation
+│   │   ├── common
+│   │   │   └── src
+│   │   │       ├── bytes
+│   │   │       ├── ids
+│   │   │       ├── time
+│   │   │       └── version
+│   │   ├── config
+│   │   │   └── src
+│   │   │       ├── environment
+│   │   │       ├── loader
+│   │   │       └── validation
+│   │   ├── errors
+│   │   │   └── src
+│   │   └── telemetry
+│   │       └── src
+│   │           ├── metrics
+│   │           ├── redaction
+│   │           └── tracing
+│   ├── media
+│   │   ├── call-core
+│   │   │   └── src
+│   │   │       ├── epoch
+│   │   │       ├── media-key
+│   │   │       ├── participant
+│   │   │       ├── session
+│   │   │       └── signaling
+│   │   └── sframe
+│   │       └── src
+│   │           ├── decrypt
+│   │           ├── encrypt
+│   │           └── key-schedule
+│   ├── platform
+│   │   ├── android
+│   │   │   └── src
+│   │   ├── api
+│   │   │   └── src
+│   │   │       ├── background
+│   │   │       ├── biometrics
+│   │   │       ├── clipboard
+│   │   │       ├── filesystem
+│   │   │       ├── notification
+│   │   │       └── secure-keystore
+│   │   ├── linux
+│   │   │   └── src
+│   │   └── windows
+│   │       └── src
+│   ├── privacy
+│   │   ├── core
+│   │   │   └── src
+│   │   │       ├── mode
+│   │   │       ├── policy
+│   │   │       └── privacy-level
+│   │   ├── metadata
+│   │   │   └── src
+│   │   │       ├── audio
+│   │   │       ├── document
+│   │   │       ├── image
+│   │   │       ├── sanitizer
+│   │   │       └── video
+│   │   ├── padding
+│   │   │   └── src
+│   │   │       ├── bucket
+│   │   │       ├── policy
+│   │   │       └── random-padding
+│   │   ├── sender-hiding
+│   │   │   └── src
+│   │   │       ├── certificate
+│   │   │       ├── envelope
+│   │   │       └── routing-token
+│   │   └── strong-traffic
+│   │       └── src
+│   │           ├── degraded
+│   │           ├── dummy
+│   │           ├── epoch
+│   │           ├── profile
+│   │           ├── queue
+│   │           ├── retransmission
+│   │           ├── scheduler
+│   │           ├── slot
+│   │           └── state-machine
+│   ├── protocol
+│   │   ├── cell
+│   │   │   └── src
+│   │   │       ├── ack
+│   │   │       ├── codec
+│   │   │       ├── fragmentation
+│   │   │       ├── reassembly
+│   │   │       ├── retransmission
+│   │   │       └── v1
+│   │   ├── control
+│   │   │   └── src
+│   │   │       ├── device
+│   │   │       ├── group
+│   │   │       ├── receipts
+│   │   │       ├── security
+│   │   │       └── strong-mode
+│   │   ├── core
+│   │   │   └── src
+│   │   │       ├── capability
+│   │   │       ├── negotiation
+│   │   │       ├── transcript
+│   │   │       └── version
+│   │   ├── envelope
+│   │   │   └── src
+│   │   │       ├── opaque
+│   │   │       ├── routing
+│   │   │       └── sender-hiding
+│   │   └── object
+│   │       └── src
+│   │           ├── descriptor
+│   │           ├── manifest
+│   │           ├── secure-object
+│   │           └── serialization
+│   ├── server
+│   │   └── core
+│   │       └── src
+│   │           ├── abuse
+│   │           ├── account
+│   │           ├── auth
+│   │           ├── backup
+│   │           ├── capability
+│   │           ├── contact-discovery
+│   │           ├── device
+│   │           ├── diagnostic
+│   │           ├── group
+│   │           ├── key-directory
+│   │           ├── key-transparency
+│   │           ├── mailbox
+│   │           ├── object
+│   │           ├── profile
+│   │           ├── push
+│   │           └── username
+│   ├── storage
+│   │   ├── client
+│   │   │   └── src
+│   │   │       ├── attachments
+│   │   │       ├── cache
+│   │   │       ├── drafts
+│   │   │       ├── identity
+│   │   │       ├── messages
+│   │   │       ├── search
+│   │   │       ├── security-events
+│   │   │       └── sessions
+│   │   ├── core
+│   │   │   └── src
+│   │   │       ├── pagination
+│   │   │       ├── repository
+│   │   │       └── transaction
+│   │   └── server
+│   │       └── src
+│   │           ├── object-store
+│   │           ├── postgres
+│   │           ├── redis
+│   │           └── repositories
+│   ├── testing
+│   │   └── test-support
+│   │       └── src
+│   │           ├── builders
+│   │           ├── crypto
+│   │           ├── fixtures
+│   │           ├── mocks
+│   │           └── network
+│   └── transport
+│       ├── core
+│       │   └── src
+│       │       ├── connection
+│       │       ├── endpoint
+│       │       └── retry
+│       ├── ohttp
+│       │   └── src
+│       │       ├── client
+│       │       ├── encapsulation
+│       │       └── gateway-client
+│       ├── quic
+│       │   └── src
+│       │       ├── congestion
+│       │       ├── datagram
+│       │       ├── stream
+│       │       └── tls
+│       └── tunnel
+│           └── src
+│               ├── epoch
+│               ├── hpke-init
+│               ├── keepalive
+│               └── key-derivation
+├── docs
+│   ├── adr
+│   ├── api
+│   ├── architecture
+│   ├── crypto
+│   ├── database
+│   ├── development
+│   ├── operations
+│   ├── platform
+│   │   ├── android
+│   │   ├── linux
+│   │   └── windows
+│   ├── privacy
+│   ├── protocol
+│   └── testing
+├── frontends
+│   ├── android
+│   │   ├── app
+│   │   │   └── src
+│   │   │       └── main
+│   │   │           ├── assets
+│   │   │           ├── java
+│   │   │           └── res
+│   │   ├── bindings
+│   │   ├── platform
+│   │   │   ├── background
+│   │   │   ├── filesystem
+│   │   │   ├── keystore
+│   │   │   ├── notification
+│   │   │   └── permissions
+│   │   ├── resources
+│   │   └── ui
+│   │       ├── components
+│   │       ├── navigation
+│   │       ├── screens
+│   │       ├── state
+│   │       └── theme
+│   ├── linux
+│   │   ├── native
+│   │   │   ├── bindings
+│   │   │   ├── commands
+│   │   │   ├── events
+│   │   │   └── platform
+│   │   ├── resources
+│   │   └── src
+│   │       ├── app
+│   │       ├── components
+│   │       ├── features
+│   │       │   ├── auth
+│   │       │   ├── calls
+│   │       │   ├── chat
+│   │       │   ├── contacts
+│   │       │   ├── files
+│   │       │   ├── groups
+│   │       │   ├── security
+│   │       │   └── settings
+│   │       ├── hooks
+│   │       ├── pages
+│   │       ├── platform
+│   │       ├── stores
+│   │       ├── styles
+│   │       └── types
+│   └── windows
+│       ├── native
+│       │   ├── bindings
+│       │   ├── commands
+│       │   ├── events
+│       │   └── platform
+│       ├── resources
+│       └── src
+│           ├── app
+│           ├── components
+│           ├── features
+│           │   ├── auth
+│           │   ├── calls
+│           │   ├── chat
+│           │   ├── contacts
+│           │   ├── files
+│           │   ├── groups
+│           │   ├── security
+│           │   └── settings
+│           ├── hooks
+│           ├── pages
+│           ├── platform
+│           ├── stores
+│           ├── styles
+│           └── types
+├── fuzz
+│   ├── cell-parser
+│   ├── control-parser
+│   ├── envelope-parser
+│   ├── manifest-parser
+│   ├── object-parser
+│   ├── padding-decoder
+│   ├── protocol-negotiation
+│   └── stream-reassembly
+├── infra
+│   ├── certificates
+│   │   └── development
+│   ├── ci
+│   ├── compose
+│   │   ├── calls
+│   │   ├── core
+│   │   ├── full
+│   │   ├── observability
+│   │   └── strong-mode
+│   ├── config
+│   │   ├── local
+│   │   ├── production.example
+│   │   └── test
+│   ├── docker
+│   │   ├── minio
+│   │   ├── postgres
+│   │   ├── redis
+│   │   ├── reverse-proxy
+│   │   ├── services
+│   │   └── sfu
+│   ├── monitoring
+│   │   ├── grafana
+│   │   └── prometheus
+│   ├── network
+│   │   ├── bandwidth
+│   │   ├── latency
+│   │   ├── netns
+│   │   ├── packet-loss
+│   │   └── tc
+│   ├── postgres
+│   │   ├── databases
+│   │   └── init
+│   └── systemd
+├── scripts
+│   ├── bootstrap
+│   ├── database
+│   ├── dev
+│   ├── network
+│   ├── release
+│   ├── security
+│   └── test
+├── security
+│   ├── audits
+│   │   ├── external
+│   │   └── internal
+│   ├── checklists
+│   │   ├── pre-commit
+│   │   ├── pre-release
+│   │   └── production
+│   ├── crypto-review
+│   ├── hardening
+│   │   ├── android
+│   │   ├── linux
+│   │   ├── server
+│   │   └── windows
+│   ├── incident-response
+│   ├── protocol-review
+│   ├── release-signing
+│   ├── supply-chain
+│   │   ├── advisories
+│   │   ├── dependency-policy
+│   │   └── sbom
+│   └── threat-model
+│       ├── client
+│       ├── metadata
+│       ├── protocol
+│       ├── server
+│       └── supply-chain
+├── services
+│   ├── abuse-control
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── account-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── auth-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── backup-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── call-signaling
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── config-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── contact-discovery
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── device-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── diagnostic-ingest
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── group-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ingress-relay
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── key-directory
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── key-transparency
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── link-preview-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── mailbox-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── mailbox-store
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── object-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ohttp-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ohttp-relay
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── profile-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── push-router
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   └── username-service
+│       ├── migrations
+│       ├── src
+│       │   ├── api
+│       │   ├── application
+│       │   ├── domain
+│       │   └── infrastructure
+│       └── tests
+├── tests
+│   ├── chaos
+│   ├── e2e
+│   ├── integration
+│   ├── interop
+│   │   ├── linux-android
+│   │   ├── linux-linux
+│   │   ├── linux-windows
+│   │   └── windows-android
+│   ├── network
+│   ├── performance
+│   ├── privacy
+│   ├── protocol
+│   ├── recovery
+│   ├── regression
+│   └── security
+├── third-party
+│   ├── licenses
+│   ├── notices
+│   ├── patches
+│   └── vendor
+├── tools
+│   ├── benchmark-runner
+│   ├── chaos-lab
+│   ├── cli-client
+│   │   ├── src
+│   │   └── tests
+│   ├── db-tool
+│   ├── devctl
+│   ├── key-tool
+│   ├── migration-tool
+│   ├── network-sim
+│   ├── packet-lab
+│   ├── vector-generator
+│   └── xtask
+├── tree.txt
+└── var
+    ├── certs
+    ├── data
+    │   ├── backups
+    │   ├── mailbox
+    │   ├── minio
+    │   ├── objects
+    │   ├── postgres
+    │   └── redis
+    ├── logs
+    │   ├── clients
+    │   └── services
+    ├── profiles
+    │   ├── alice
+    │   ├── bob
+    │   └── carol
+    └── tmp
+
+695 directories, 1 file

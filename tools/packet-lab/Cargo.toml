@@ -1,0 +1,17 @@
+[package]
+name = "chat-tool-packet-lab"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+chat-protocol-cell.workspace = true
+chat-protocol-envelope.workspace = true
+chat-protocol-object.workspace = true
+chat-transport-core.workspace = true
+anyhow.workspace = true
+bytes.workspace = true
+
+[lints]
+workspace = true

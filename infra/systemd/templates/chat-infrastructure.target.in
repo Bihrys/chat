@@ -1,0 +1,4 @@
+[Unit]
+Description=Chat local infrastructure
+Wants=chat-postgresql.service chat-valkey.service chat-minio.service
+After=chat-postgresql.service chat-valkey.service chat-minio.service

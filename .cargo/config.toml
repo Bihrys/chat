@@ -1,0 +1,12 @@
+[build]
+incremental = false
+rustc-wrapper = "/usr/bin/sccache"
+
+[term]
+color = "auto"
+
+[alias]
+check-all = "check --workspace --all-targets"
+test-all = "test --workspace --all-targets"
+lint = "clippy --workspace --all-targets -- -D warnings"
+xtask = "run -q -p chat-tool-xtask --"

@@ -1,0 +1,10 @@
+{
+  "name": "chat-monorepo",
+  "private": true,
+  "packageManager": "pnpm@11.3.0",
+  "scripts": {
+    "dev:linux": "pnpm --dir frontends/linux tauri:dev",
+    "build:linux": "pnpm --dir frontends/linux tauri:build",
+    "typecheck": "pnpm -r typecheck"
+  }
+}

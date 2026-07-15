@@ -1,0 +1,544 @@
+.
+├── 121212121.txt
+├── benches
+│   ├── cell
+│   ├── crypto
+│   ├── end-to-end
+│   ├── padding
+│   ├── protocol
+│   ├── storage
+│   ├── strong-traffic
+│   └── transport
+├── .cargo
+├── contracts
+│   ├── fixtures
+│   │   ├── accounts
+│   │   ├── conversations
+│   │   ├── devices
+│   │   ├── groups
+│   │   └── objects
+│   ├── proto
+│   │   ├── events
+│   │   │   └── v1
+│   │   ├── internal
+│   │   │   └── v1
+│   │   ├── local
+│   │   │   └── v1
+│   │   └── public
+│   │       └── v1
+│   ├── schema
+│   │   ├── json
+│   │   └── sql
+│   └── test-vectors
+│       ├── cell-v1
+│       ├── crypto
+│       ├── envelope-v1
+│       ├── mls
+│       ├── object-v1
+│       ├── padding-v1
+│       └── transport
+├── crates
+│   ├── backup
+│   │   └── core
+│   │       └── src
+│   ├── client
+│   │   ├── core
+│   │   │   └── src
+│   │   └── facade
+│   │       └── src
+│   ├── crypto
+│   │   ├── api
+│   │   │   └── src
+│   │   ├── core
+│   │   │   └── src
+│   │   ├── key-transparency-provider
+│   │   │   └── src
+│   │   ├── mls-provider
+│   │   │   └── src
+│   │   ├── opaque-provider
+│   │   │   └── src
+│   │   └── pairwise-provider
+│   │       └── src
+│   ├── ffi
+│   │   └── android
+│   │       └── src
+│   ├── foundation
+│   │   ├── common
+│   │   │   └── src
+│   │   ├── config
+│   │   │   └── src
+│   │   ├── errors
+│   │   │   └── src
+│   │   └── telemetry
+│   │       └── src
+│   ├── media
+│   │   ├── call-core
+│   │   │   └── src
+│   │   └── sframe
+│   │       └── src
+│   ├── platform
+│   │   ├── android
+│   │   │   └── src
+│   │   ├── api
+│   │   │   └── src
+│   │   ├── linux
+│   │   │   └── src
+│   │   └── windows
+│   │       └── src
+│   ├── privacy
+│   │   ├── core
+│   │   │   └── src
+│   │   ├── metadata
+│   │   │   └── src
+│   │   ├── padding
+│   │   │   └── src
+│   │   ├── sender-hiding
+│   │   │   └── src
+│   │   └── strong-traffic
+│   │       └── src
+│   ├── protocol
+│   │   ├── cell
+│   │   │   └── src
+│   │   ├── control
+│   │   │   └── src
+│   │   ├── core
+│   │   │   └── src
+│   │   ├── envelope
+│   │   │   └── src
+│   │   └── object
+│   │       └── src
+│   ├── server
+│   │   └── core
+│   │       └── src
+│   ├── storage
+│   │   ├── client
+│   │   │   └── src
+│   │   ├── core
+│   │   │   └── src
+│   │   └── server
+│   │       └── src
+│   ├── testing
+│   │   └── test-support
+│   │       └── src
+│   └── transport
+│       ├── core
+│       │   └── src
+│       ├── ohttp
+│       │   └── src
+│       ├── quic
+│       │   └── src
+│       └── tunnel
+│           └── src
+├── docs
+│   ├── adr
+│   ├── api
+│   ├── architecture
+│   ├── crypto
+│   ├── database
+│   ├── development
+│   │   └── project-tree
+│   │       ├── native-architecture.txt
+│   │       ├── tree111.txt
+│   │       └── tree.txt
+│   ├── operations
+│   ├── platform
+│   │   ├── android
+│   │   ├── linux
+│   │   └── windows
+│   ├── privacy
+│   ├── protocol
+│   └── testing
+├── frontends
+│   ├── android
+│   │   ├── app
+│   │   │   └── src
+│   │   ├── bindings
+│   │   ├── platform
+│   │   │   ├── background
+│   │   │   ├── filesystem
+│   │   │   ├── keystore
+│   │   │   ├── notification
+│   │   │   └── permissions
+│   │   ├── resources
+│   │   └── ui
+│   │       ├── components
+│   │       ├── navigation
+│   │       ├── screens
+│   │       ├── state
+│   │       └── theme
+│   ├── linux
+│   │   ├── native
+│   │   │   ├── bindings
+│   │   │   ├── commands
+│   │   │   ├── events
+│   │   │   └── platform
+│   │   ├── resources
+│   │   └── src
+│   │       ├── app
+│   │       ├── components
+│   │       ├── features
+│   │       ├── hooks
+│   │       ├── pages
+│   │       ├── platform
+│   │       ├── stores
+│   │       ├── styles
+│   │       └── types
+│   └── windows
+│       ├── native
+│       │   ├── bindings
+│       │   ├── commands
+│       │   ├── events
+│       │   └── platform
+│       ├── resources
+│       └── src
+│           ├── app
+│           ├── components
+│           ├── features
+│           ├── hooks
+│           ├── pages
+│           ├── platform
+│           ├── stores
+│           ├── styles
+│           └── types
+├── fuzz
+│   ├── cell-parser
+│   ├── control-parser
+│   ├── envelope-parser
+│   ├── manifest-parser
+│   ├── object-parser
+│   ├── padding-decoder
+│   ├── protocol-negotiation
+│   └── stream-reassembly
+├── .github
+│   ├── ISSUE_TEMPLATE
+│   └── workflows
+├── infra
+│   ├── certificates
+│   │   └── development
+│   ├── ci
+│   ├── config
+│   │   ├── local
+│   │   ├── production.example
+│   │   └── test
+│   ├── local
+│   │   ├── env
+│   │   └── ports
+│   ├── monitoring
+│   │   ├── grafana
+│   │   └── prometheus
+│   ├── native
+│   │   ├── minio
+│   │   │   ├── config
+│   │   │   └── policies
+│   │   ├── postgresql
+│   │   │   ├── config
+│   │   │   ├── databases
+│   │   │   └── init
+│   │   ├── reverse-proxy
+│   │   │   └── config
+│   │   ├── services
+│   │   │   ├── env
+│   │   │   └── ports
+│   │   ├── sfu
+│   │   │   └── config
+│   │   └── valkey
+│   │       └── config
+│   ├── network
+│   │   ├── bandwidth
+│   │   ├── latency
+│   │   ├── netns
+│   │   ├── packet-loss
+│   │   └── tc
+│   └── systemd
+│       ├── system
+│       │   ├── services
+│       │   └── targets
+│       ├── templates
+│       └── user
+│           ├── clients
+│           ├── infrastructure
+│           ├── services
+│           └── targets
+├── scripts
+│   ├── bootstrap
+│   ├── database
+│   ├── dev
+│   ├── infrastructure
+│   │   ├── minio
+│   │   ├── monitoring
+│   │   ├── postgresql
+│   │   └── valkey
+│   ├── network
+│   ├── release
+│   ├── security
+│   ├── services
+│   │   ├── restart
+│   │   ├── start
+│   │   ├── status
+│   │   └── stop
+│   └── test
+├── security
+│   ├── audits
+│   │   ├── external
+│   │   └── internal
+│   ├── checklists
+│   │   ├── pre-commit
+│   │   ├── pre-release
+│   │   └── production
+│   ├── crypto-review
+│   ├── hardening
+│   │   ├── android
+│   │   ├── linux
+│   │   ├── server
+│   │   └── windows
+│   ├── incident-response
+│   ├── protocol-review
+│   ├── release-signing
+│   ├── supply-chain
+│   │   ├── advisories
+│   │   ├── dependency-policy
+│   │   └── sbom
+│   └── threat-model
+│       ├── client
+│       ├── metadata
+│       ├── protocol
+│       ├── server
+│       └── supply-chain
+├── services
+│   ├── abuse-control
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── account-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── auth-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── backup-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── call-signaling
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── config-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── contact-discovery
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── device-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── diagnostic-ingest
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── group-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ingress-relay
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── key-directory
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── key-transparency
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── link-preview-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── mailbox-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── mailbox-store
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── object-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ohttp-gateway
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── ohttp-relay
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── profile-service
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   ├── push-router
+│   │   ├── migrations
+│   │   ├── src
+│   │   │   ├── api
+│   │   │   ├── application
+│   │   │   ├── domain
+│   │   │   └── infrastructure
+│   │   └── tests
+│   └── username-service
+│       ├── migrations
+│       ├── src
+│       │   ├── api
+│       │   ├── application
+│       │   ├── domain
+│       │   └── infrastructure
+│       └── tests
+├── tests
+│   ├── chaos
+│   ├── e2e
+│   ├── integration
+│   ├── interop
+│   │   ├── linux-android
+│   │   ├── linux-linux
+│   │   ├── linux-windows
+│   │   └── windows-android
+│   ├── network
+│   ├── performance
+│   ├── privacy
+│   ├── protocol
+│   ├── recovery
+│   ├── regression
+│   └── security
+├── third-party
+│   ├── licenses
+│   ├── notices
+│   ├── patches
+│   └── vendor
+├── tools
+│   ├── benchmark-runner
+│   ├── chaos-lab
+│   ├── cli-client
+│   │   ├── src
+│   │   └── tests
+│   ├── db-tool
+│   ├── devctl
+│   ├── key-tool
+│   ├── migration-tool
+│   ├── network-sim
+│   ├── packet-lab
+│   ├── vector-generator
+│   └── xtask
+└── var
+    ├── certs
+    ├── data
+    │   ├── backups
+    │   ├── grafana
+    │   ├── mailbox
+    │   ├── minio
+    │   ├── objects
+    │   ├── postgresql
+    │   ├── prometheus
+    │   ├── sfu
+    │   └── valkey
+    ├── logs
+    │   ├── clients
+    │   ├── infrastructure
+    │   └── services
+    ├── profiles
+    │   ├── alice
+    │   ├── bob
+    │   └── carol
+    ├── run
+    │   ├── pids
+    │   └── sockets
+    └── tmp
+
+538 directories, 4 files

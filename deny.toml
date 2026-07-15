@@ -1,0 +1,5 @@
+# Dependency, license and supply-chain policy.
+#
+# This file is intentionally minimal during project bootstrap.
+# A strict allow/deny policy will be added before external dependencies
+# are introduced into security-critical crates.

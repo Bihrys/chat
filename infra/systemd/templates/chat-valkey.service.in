@@ -1,0 +1,13 @@
+[Unit]
+Description=Chat local Valkey
+After=network.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=@ROOT@
+ExecStart=@ROOT@/scripts/infrastructure/valkey/start.sh
+ExecStop=@ROOT@/scripts/infrastructure/valkey/stop.sh
+RemainAfterExit=yes
+
+[Install]
+WantedBy=chat-infrastructure.target

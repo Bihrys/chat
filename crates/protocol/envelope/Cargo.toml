@@ -1,0 +1,16 @@
+[package]
+name = "chat-protocol-envelope"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+chat-foundation-common.workspace = true
+chat-foundation-errors.workspace = true
+chat-protocol-core.workspace = true
+bytes.workspace = true
+serde.workspace = true
+
+[lints]
+workspace = true
