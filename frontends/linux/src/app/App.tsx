@@ -689,13 +689,14 @@ interface AuthScreenProps {
 
 function AuthScreen(props: AuthScreenProps) {
   const [mode, setMode] = useState<"login" | "register">("register");
-  const [username, setUsername] = useState("");
-  const [displayName, setDisplayName] = useState("");
+  const [name, setName] = useState("");
   const [password, setPassword] = useState("");
-  const [confirmPassword, setConfirmPassword] = useState("");
   const [localError, setLocalError] = useState<string | null>(null);
 
   function switchMode(next: "login" | "register") {
+    if (next === mode) {
+      return;
+    }
     setMode(next);
     setLocalError(null);
   }
@@ -710,15 +711,32 @@ function AuthScreen(props: AuthScreenProps) {
         <SettingsIcon />
         <span>{props.t.settings}</span>
       </button>
-      <section className="onboarding-card auth-card">
-        <p className="eyebrow">{props.t.appName} · {props.t.localDevelopment}</p>
-        <h1>{mode === "register" ? props.t.createAccountTitle : props.t.welcomeBack}</h1>
-<p className="onboarding-intro">{props.t.authIntro}</p>
+      <section
+        className={`onboarding-card auth-card auth-card-${mode}`}
+      >
+        <div className={`auth-heading auth-heading-${mode}`}>
+          <p className="eyebrow">
+            {props.t.appName} · {props.t.localDevelopment}
+          </p>
+          <h1>
+            {mode === "register"
+              ? props.t.createAccountTitle
+              : props.t.welcomeBack}
+          </h1>
+          <p className="onboarding-intro">{props.t.authIntro}</p>
+        </div>
 
-        <div className="auth-tabs" role="tablist" aria-label={props.t.login}>
+        <div
+          className={`auth-tabs auth-tabs-${mode}`}
+          role="tablist"
+          aria-label={props.t.login}
+        >
+          <span className="auth-tab-indicator" aria-hidden="true" />
           <button
             className={mode === "register" ? "active" : ""}
             type="button"
+            role="tab"
+            aria-selected={mode === "register"}
             onClick={() => switchMode("register")}
           >
             {props.t.register}
@@ -726,97 +744,78 @@ function AuthScreen(props: AuthScreenProps) {
           <button
             className={mode === "login" ? "active" : ""}
             type="button"
+            role="tab"
+            aria-selected={mode === "login"}
             onClick={() => switchMode("login")}
           >
             {props.t.login}
           </button>
         </div>
 
-        <form
-          className="auth-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            setLocalError(null);
-            if (mode === "register" && password !== confirmPassword) {
-              setLocalError(props.t.passwordsMismatch);
-              return;
-            }
-            if (mode === "register") {
-              void props.onRegister(username, displayName, password);
-            } else {
-              void props.onLogin(username, password);
-            }
-          }}
-        >
-          <label>
-            {props.t.username}
-            <input
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="bihrys1"
-              minLength={3}
-              maxLength={32}
-              pattern="[A-Za-z0-9_]+"
-              autoComplete="username"
-              autoFocus
-              required
-            />
-            <small>{props.t.usernameHint}</small>
-          </label>
-
-          {mode === "register" && (
+        <div className={`auth-form-stage auth-form-stage-${mode}`}>
+          <form
+            className={`auth-form auth-form-${mode}`}
+            autoComplete="off"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setLocalError(null);
+              const normalizedName = name.trim();
+              if (!normalizedName) {
+                return;
+              }
+              if (mode === "register") {
+                void props.onRegister(normalizedName, normalizedName, password);
+              } else {
+                void props.onLogin(normalizedName, password);
+              }
+            }}
+          >
             <label>
-              {props.t.displayName}
+              {props.t.username}
               <input
-                value={displayName}
-                onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Bihrys"
-                maxLength={64}
-                autoComplete="name"
+                value={name}
+                onChange={(event) => setName(event.target.value)}
+                placeholder={props.t.username}
+                minLength={3}
+                maxLength={32}
+                pattern="[A-Za-z0-9_]+"
+                autoComplete="off"
+                autoFocus
                 required
               />
+              {mode === "register" && <small>{props.t.usernameHint}</small>}
             </label>
-          )}
 
-          <label>
-            {props.t.password}
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              minLength={8}
-              maxLength={128}
-              autoComplete={
-                mode === "register" ? "new-password" : "current-password"
-              }
-              required
-            />
-            {mode === "register" && <small>{props.t.passwordHint}</small>}
-          </label>
-
-          {mode === "register" && (
             <label>
-              {props.t.confirmPassword}
+              {props.t.password}
               <input
                 type="password"
-                value={confirmPassword}
-                onChange={(event) => setConfirmPassword(event.target.value)}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder={props.t.password}
                 minLength={8}
                 maxLength={128}
-                autoComplete="new-password"
+                autoComplete={
+                  mode === "register" ? "new-password" : "current-password"
+                }
                 required
               />
+              {mode === "register" && <small>{props.t.passwordHint}</small>}
             </label>
-          )}
 
-          <button className="primary-button auth-submit" type="submit" disabled={props.busy}>
-            {props.busy
-              ? props.t.pleaseWait
-              : mode === "register"
-                ? props.t.createAccount
-                : props.t.login}
-          </button>
-        </form>
+            <button
+              className="primary-button auth-submit"
+              type="submit"
+              disabled={props.busy}
+            >
+              {props.busy
+                ? props.t.pleaseWait
+                : mode === "register"
+                  ? props.t.createAccount
+                  : props.t.login}
+            </button>
+          </form>
+        </div>
 
         {(localError || props.error) && (
           <p className="form-error">{localError ?? props.error}</p>
