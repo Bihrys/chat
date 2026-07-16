@@ -10,6 +10,8 @@ const ACCOUNT_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0001_basic_accounts.sql");
 const SOCIAL_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0002_social_graph.sql");
+const PROFILE_CONTACT_MIGRATION: &str =
+    include_str!("../../../../infra/native/postgresql/migrations/identity/0003_profile_contacts.sql");
 
 #[derive(Clone)]
 pub(crate) struct AccountRepository {
@@ -34,6 +36,10 @@ impl AccountRepository {
             .execute(&pool)
             .await
             .context("failed to apply social graph migration")?;
+        sqlx::raw_sql(PROFILE_CONTACT_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply profile/contact migration")?;
 
         Ok(Self { pool })
     }
@@ -105,6 +111,9 @@ impl AccountRepository {
             username: username.to_owned(),
             display_name: display_name.to_owned(),
             chat_id,
+            avatar_data_url: None,
+            remark_name: None,
+            source: None,
             created_at,
         })
     }
@@ -112,7 +121,9 @@ impl AccountRepository {
     pub(crate) async fn get(&self, account_id: Uuid) -> Result<Option<Account>> {
         let row = sqlx::query(
             r"
-            SELECT a.account_id, p.username, p.display_name, p.chat_id, a.created_at
+            SELECT a.account_id, p.username, p.display_name, p.chat_id,
+                   p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
+                   a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE a.account_id = $1
@@ -133,7 +144,9 @@ impl AccountRepository {
     ) -> Result<Option<Account>> {
         let row = sqlx::query(
             r"
-            SELECT a.account_id, p.username, p.display_name, p.chat_id, a.created_at
+            SELECT a.account_id, p.username, p.display_name, p.chat_id,
+                   p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
+                   a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE p.username_normalized = $1
@@ -154,7 +167,9 @@ impl AccountRepository {
         }
         let row = sqlx::query(
             r"
-            SELECT a.account_id, p.username, p.display_name, p.chat_id, a.created_at
+            SELECT a.account_id, p.username, p.display_name, p.chat_id,
+                   p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
+                   a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE upper(p.chat_id) = upper($1)
@@ -196,6 +211,80 @@ impl AccountRepository {
         self.get(account_id).await
     }
 
+    pub(crate) async fn update_avatar(
+        &self,
+        account_id: Uuid,
+        avatar_data_url: Option<&str>,
+    ) -> Result<Option<Account>> {
+        let updated = sqlx::query(
+            r"
+            UPDATE account_profiles p
+            SET avatar_data_url = $2, updated_at = now()
+            FROM accounts a
+            WHERE p.account_id = $1
+              AND a.account_id = p.account_id
+              AND a.deleted_at IS NULL
+              AND a.status = 1
+            ",
+        )
+        .bind(account_id)
+        .bind(avatar_data_url)
+        .execute(&self.pool)
+        .await
+        .context("failed to update avatar")?;
+        if updated.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get(account_id).await
+    }
+
+    pub(crate) async fn get_contact(&self, actor: Uuid, contact: Uuid) -> Result<Option<Account>> {
+        let row = sqlx::query(
+            r"
+            SELECT a.account_id, p.username, p.display_name, p.chat_id,
+                   p.avatar_data_url, c.remark_name, c.source, a.created_at
+            FROM contacts c
+            JOIN accounts a ON a.account_id = c.contact_account_id
+            JOIN account_profiles p ON p.account_id = a.account_id
+            WHERE c.account_id = $1
+              AND c.contact_account_id = $2
+              AND a.deleted_at IS NULL
+              AND a.status = 1
+            ",
+        )
+        .bind(actor)
+        .bind(contact)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to fetch contact")?;
+        row.map(row_to_account).transpose()
+    }
+
+    pub(crate) async fn update_contact_remark(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+        remark_name: Option<&str>,
+    ) -> Result<Option<Account>> {
+        let result = sqlx::query(
+            r"
+            UPDATE contacts
+            SET remark_name = $3
+            WHERE account_id = $1 AND contact_account_id = $2
+            ",
+        )
+        .bind(actor)
+        .bind(contact)
+        .bind(remark_name)
+        .execute(&self.pool)
+        .await
+        .context("failed to update contact remark")?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_contact(actor, contact).await
+    }
+
     pub(crate) async fn delete(&self, account_id: Uuid) -> Result<bool> {
         let result = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
             .bind(account_id)
@@ -208,14 +297,15 @@ impl AccountRepository {
     pub(crate) async fn list_contacts(&self, actor: Uuid) -> Result<Vec<Account>> {
         let rows = sqlx::query(
             r"
-            SELECT a.account_id, p.username, p.display_name, p.chat_id, a.created_at
+            SELECT a.account_id, p.username, p.display_name, p.chat_id,
+                   p.avatar_data_url, c.remark_name, c.source, a.created_at
             FROM contacts c
             JOIN accounts a ON a.account_id = c.contact_account_id
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE c.account_id = $1
               AND a.deleted_at IS NULL
               AND a.status = 1
-            ORDER BY lower(p.display_name), p.chat_id
+            ORDER BY lower(COALESCE(c.remark_name, p.display_name)), p.chat_id
             ",
         )
         .bind(actor)
@@ -294,6 +384,7 @@ impl AccountRepository {
                 peer_profile.username AS peer_username,
                 peer_profile.display_name AS peer_display_name,
                 peer_profile.chat_id AS peer_chat_id,
+                peer_profile.avatar_data_url AS peer_avatar_data_url,
                 peer.created_at AS peer_created_at
             FROM friend_requests fr
             JOIN accounts peer ON peer.account_id = CASE
@@ -330,6 +421,9 @@ impl AccountRepository {
                     username: row.try_get("peer_username")?,
                     display_name: row.try_get("peer_display_name")?,
                     chat_id: row.try_get("peer_chat_id")?,
+                    avatar_data_url: row.try_get("peer_avatar_data_url")?,
+                    remark_name: None,
+                    source: None,
                     created_at: row.try_get("peer_created_at")?,
                 },
             };
@@ -420,6 +514,9 @@ fn row_to_account(row: sqlx::postgres::PgRow) -> Result<Account> {
         username: row.try_get("username")?,
         display_name: row.try_get("display_name")?,
         chat_id: row.try_get("chat_id")?,
+        avatar_data_url: row.try_get("avatar_data_url")?,
+        remark_name: row.try_get("remark_name")?,
+        source: row.try_get("source")?,
         created_at: row.try_get("created_at")?,
     })
 }

@@ -74,6 +74,14 @@ pub(crate) struct ConversationRecord {
 }
 
 #[derive(Clone, Debug)]
+pub(crate) struct CommonGroupRecord {
+    pub(crate) group_id: Uuid,
+    pub(crate) conversation_id: Uuid,
+    pub(crate) group_code: String,
+    pub(crate) name: String,
+}
+
+#[derive(Clone, Debug)]
 pub(crate) struct GroupMemberRecord {
     pub(crate) account_id: Uuid,
     pub(crate) role: GroupRole,

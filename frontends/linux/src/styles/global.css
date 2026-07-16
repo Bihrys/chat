@@ -103,10 +103,10 @@ svg {
 .wechat-shell {
   width: 100%;
   height: 100%;
-  min-width: 760px;
-  min-height: 520px;
+  min-width: 0;
+  min-height: 0;
   display: grid;
-  grid-template-columns: 62px clamp(236px, 27vw, 310px) minmax(0, 1fr);
+  grid-template-columns: 58px clamp(190px, 28vw, 285px) minmax(0, 1fr);
   overflow: hidden;
   background: var(--panel);
 }
@@ -546,7 +546,7 @@ svg {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 10px 20px;
+  padding: 10px clamp(10px, 2.5vw, 20px);
   border-bottom: 1px solid var(--border-soft);
   background: var(--panel);
 }
@@ -602,7 +602,7 @@ svg {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 24px clamp(20px, 5vw, 72px);
+  padding: 20px clamp(10px, 4vw, 56px);
   background: var(--panel);
 }
 
@@ -616,6 +616,8 @@ svg {
 }
 
 .message-row {
+  min-width: 0;
+  max-width: 100%;
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -626,6 +628,7 @@ svg {
 }
 
 .message-body-column {
+  min-width: 0;
   max-width: min(72%, 680px);
   display: grid;
   gap: 4px;
@@ -643,6 +646,7 @@ svg {
 
 .message-bubble {
   position: relative;
+  max-width: 100%;
   min-width: 34px;
   padding: 9px 12px;
   border-radius: 4px;
@@ -672,22 +676,13 @@ svg {
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: 34px auto;
+  grid-template-rows: auto;
   align-items: end;
-  gap: 4px 12px;
-  min-height: 142px;
-  padding: 8px 18px 16px;
+  gap: 12px;
+  min-height: 112px;
+  padding: 14px clamp(10px, 2.5vw, 18px) 16px;
   border-top: 1px solid var(--border-soft);
   background: var(--panel);
-}
-
-.composer-tools {
-  grid-column: 1 / -1;
-  display: flex;
-  gap: 18px;
-  align-items: center;
-  color: var(--text-secondary);
-  font-size: 20px;
 }
 
 .composer textarea {
@@ -1671,5 +1666,375 @@ svg {
 
   .message-body-column {
     max-width: 78%;
+  }
+}
+
+@media (max-width: 620px) {
+  .wechat-shell {
+    grid-template-columns: 52px minmax(160px, 40vw) minmax(0, 1fr);
+  }
+
+  .app-rail {
+    padding-inline: 0;
+  }
+
+  .rail-nav button,
+  .rail-bottom > button {
+    width: 42px;
+  }
+
+  .message-scroll {
+    padding-inline: 8px;
+  }
+
+  .conversation-header {
+    padding-inline: 8px;
+  }
+
+  .conversation-title-block {
+    gap: 7px;
+  }
+
+  .conversation-title-block .ui-avatar {
+    width: 34px;
+    height: 34px;
+  }
+
+  .message-body-column {
+    max-width: calc(100% - 44px);
+  }
+
+  .composer {
+    gap: 7px;
+    padding-inline: 8px;
+  }
+}
+
+
+/* Contact profile and avatar upload */
+.ui-avatar {
+  overflow: hidden;
+}
+
+.ui-avatar img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+}
+
+.rail-avatar {
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+}
+
+.rail-avatar .ui-avatar {
+  width: 100%;
+  height: 100%;
+}
+
+.contact-profile {
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: clamp(24px, 6vh, 72px) clamp(18px, 7vw, 88px);
+  background: var(--panel);
+}
+
+.contact-profile-card {
+  width: min(620px, 100%);
+  margin: 0 auto;
+}
+
+.contact-profile-heading {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  padding-bottom: 24px;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.contact-profile-heading > div {
+  min-width: 0;
+}
+
+.contact-profile-heading h1,
+.contact-profile-heading p {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contact-profile-heading h1 {
+  margin: 0;
+  font-size: 21px;
+}
+
+.contact-profile-heading p {
+  margin: 7px 0 0;
+  color: var(--text-muted);
+}
+
+.contact-profile-fields {
+  margin: 0;
+}
+
+.contact-profile-fields > div {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: 112px minmax(0, 1fr);
+  gap: 16px;
+  padding: 15px 0;
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.contact-profile-fields dt {
+  color: var(--text-muted);
+}
+
+.contact-profile-fields dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.profile-value-button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.profile-value-button:hover {
+  color: var(--accent);
+}
+
+.remark-editor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 7px;
+}
+
+.remark-editor input {
+  min-width: 0;
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input);
+  outline: 0;
+}
+
+.remark-editor button,
+.common-group-links button {
+  border: 0;
+  background: transparent;
+  color: #4a8bdd;
+  cursor: pointer;
+}
+
+.common-group-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+}
+
+.common-group-links button {
+  padding: 0;
+}
+
+.contact-chat-button {
+  min-width: 132px;
+  min-height: 40px;
+  display: block;
+  margin: 28px auto 0;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  background: var(--accent);
+  color: white;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.contact-chat-button:disabled {
+  opacity: 0.5;
+}
+
+.settings-avatar-button {
+  flex: 0 0 auto;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.settings-avatar-button .ui-avatar {
+  width: 44px;
+  height: 44px;
+}
+
+.settings-avatar-button:hover {
+  color: var(--accent);
+}
+
+.settings-row.compact-row {
+  min-height: 48px;
+}
+
+.avatar-crop-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 160;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.avatar-crop-dialog {
+  width: min(440px, 100%);
+  max-height: 96vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  box-shadow: 0 24px 80px var(--shadow);
+}
+
+.avatar-crop-dialog > header,
+.avatar-crop-dialog > footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 14px 18px;
+}
+
+.avatar-crop-dialog > header {
+  border-bottom: 1px solid var(--border-soft);
+}
+
+.avatar-crop-dialog > header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.avatar-crop-dialog > header button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 22px;
+  cursor: pointer;
+}
+
+.avatar-crop-stage {
+  position: relative;
+  width: min(360px, calc(100vw - 76px));
+  aspect-ratio: 1;
+  margin: 18px auto 12px;
+  overflow: hidden;
+  background: #111;
+  touch-action: none;
+  cursor: grab;
+}
+
+.avatar-crop-stage:active {
+  cursor: grabbing;
+}
+
+.avatar-crop-stage > img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  transform-origin: center;
+  translate: -50% -50%;
+  user-select: none;
+  pointer-events: none;
+}
+
+.avatar-crop-window {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: min(280px, calc(100% - 56px));
+  aspect-ratio: 1;
+  translate: -50% -50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 999px rgba(38, 38, 38, 0.66);
+  pointer-events: none;
+}
+
+.avatar-zoom-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+}
+
+.avatar-zoom-row input {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+.avatar-crop-dialog > p {
+  margin: 10px 18px 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.avatar-crop-dialog > footer {
+  justify-content: flex-end;
+}
+
+@media (max-width: 720px) {
+  .settings-window-overlay {
+    padding: 10px;
+  }
+
+  .settings-window {
+    width: 100%;
+    height: min(620px, 96vh);
+    min-height: 0;
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .settings-content {
+    padding: 44px 14px 20px;
+  }
+
+  .settings-row {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .theme-segmented {
+    width: 100%;
+  }
+
+  .theme-segmented button {
+    flex: 1;
+    justify-content: center;
+  }
+
+  .contact-profile {
+    padding: 24px 14px;
+  }
+
+  .contact-profile-fields > div {
+    grid-template-columns: 88px minmax(0, 1fr);
   }
 }

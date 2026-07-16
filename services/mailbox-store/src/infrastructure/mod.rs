@@ -6,7 +6,7 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::domain::{
-    ConversationKind, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
+    CommonGroupRecord, ConversationKind, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
     GroupJoinRequestStatus, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord,
 };
 
@@ -568,6 +568,42 @@ impl MailboxRepository {
         }
 
         Ok(max_seq)
+    }
+
+    pub(crate) async fn list_common_groups(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+    ) -> Result<Vec<CommonGroupRecord>> {
+        let rows = sqlx::query(
+            r"
+            SELECT g.group_id, g.conversation_id, g.group_code, g.name
+            FROM group_conversations g
+            JOIN group_members actor_membership
+              ON actor_membership.group_id = g.group_id
+             AND actor_membership.account_id = $1
+            JOIN group_members contact_membership
+              ON contact_membership.group_id = g.group_id
+             AND contact_membership.account_id = $2
+            WHERE g.dissolved_at IS NULL
+            ORDER BY lower(g.name), g.group_code
+            ",
+        )
+        .bind(actor)
+        .bind(contact)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to list common groups")?;
+        rows.into_iter()
+            .map(|row| {
+                Ok(CommonGroupRecord {
+                    group_id: row.try_get("group_id")?,
+                    conversation_id: row.try_get("conversation_id")?,
+                    group_code: row.try_get("group_code")?,
+                    name: row.try_get("name")?,
+                })
+            })
+            .collect()
     }
 
     pub(crate) async fn create_group(

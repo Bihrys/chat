@@ -36,6 +36,7 @@ struct AccountWire {
     username: String,
     display_name: String,
     chat_id: String,
+    avatar_data_url: Option<String>,
     created_at: String,
 }
 
@@ -346,6 +347,7 @@ impl TryFrom<AccountWire> for Account {
             username: wire.username,
             display_name: wire.display_name,
             chat_id: wire.chat_id,
+            avatar_data_url: wire.avatar_data_url,
             created_at,
         })
     }

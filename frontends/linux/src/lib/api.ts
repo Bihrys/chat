@@ -7,6 +7,7 @@ import type {
   Account,
   AuthSession,
   ChatMessage,
+  CommonGroup,
   Conversation,
   FriendRequestMailbox,
   GroupDetails,
@@ -126,6 +127,38 @@ export async function getAccount(
   });
 }
 
+export async function getContact(
+  accessToken: string,
+  accountId: string,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function updateContactRemark(
+  accessToken: string,
+  accountId: string,
+  remarkName: string,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ remark_name: remarkName.trim() || null }),
+  });
+}
+
+export async function updateAvatar(
+  accessToken: string,
+  avatarDataUrl: string | null,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/profile/avatar`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ avatar_data_url: avatarDataUrl }),
+  });
+}
+
 export async function listFriendRequests(
   accessToken: string,
 ): Promise<FriendRequestMailbox> {
@@ -180,6 +213,16 @@ export async function createDirectConversation(
       headers: bearerHeaders(accessToken, true),
       body: JSON.stringify({ peer_account_id: peerAccountId }),
     },
+  );
+}
+
+export async function listCommonGroups(
+  accessToken: string,
+  accountId: string,
+): Promise<CommonGroup[]> {
+  return requestJson<CommonGroup[]>(
+    `${MAILBOX_SERVICE_URL}/v1/contacts/${accountId}/common-groups`,
+    { headers: bearerHeaders(accessToken) },
   );
 }
 

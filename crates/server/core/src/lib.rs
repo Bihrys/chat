@@ -127,7 +127,7 @@ pub async fn local_dev_cors(request: Request<Body>, next: Next) -> Response {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_METHODS,
-        HeaderValue::from_static("GET, POST, DELETE, OPTIONS"),
+        HeaderValue::from_static("GET, POST, PATCH, DELETE, OPTIONS"),
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,

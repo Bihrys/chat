@@ -9,6 +9,9 @@ pub(crate) struct Account {
     pub(crate) username: String,
     pub(crate) display_name: String,
     pub(crate) chat_id: String,
+    pub(crate) avatar_data_url: Option<String>,
+    pub(crate) remark_name: Option<String>,
+    pub(crate) source: Option<String>,
     pub(crate) created_at: OffsetDateTime,
 }
 

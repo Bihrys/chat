@@ -58,7 +58,7 @@ function waitForEvent(socket, predicate, timeoutMs = 5_000) {
   });
 }
 
-console.log("[1/15] Registering Alice, Bob, and Carol...");
+console.log("[1/18] Registering Alice, Bob, and Carol...");
 const aliceSession = await register(`alice_${stamp}`, "Alice Smoke Test");
 const bobSession = await register(`bob_${stamp}`, "Bob Smoke Test");
 const carolSession = await register(`carol_${stamp}`, "Carol Smoke Test");
@@ -67,14 +67,14 @@ const bob = bobSession.account;
 const carol = carolSession.account;
 assert(alice.chat_id && bob.chat_id && carol.chat_id, "public chat IDs were not generated");
 
-console.log("[2/15] Looking Bob up by exact Chat ID...");
+console.log("[2/18] Looking Bob up by exact Chat ID...");
 const foundBob = await json(
   `${accountBase}/v1/accounts/lookup?identifier=${encodeURIComponent(bob.chat_id)}`,
   { headers: authorized(aliceSession.access_token, false) },
 );
 assert(foundBob.account_id === bob.account_id, "exact Chat ID lookup failed");
 
-console.log("[3/15] Sending a friend request...");
+console.log("[3/18] Sending a friend request...");
 await json(`${accountBase}/v1/friend-requests`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
@@ -84,7 +84,7 @@ await json(`${accountBase}/v1/friend-requests`, {
   }),
 });
 
-console.log("[4/15] Bob accepts the request...");
+console.log("[4/18] Bob accepts the request...");
 const bobRequests = await json(`${accountBase}/v1/friend-requests`, {
   headers: authorized(bobSession.access_token, false),
 });
@@ -99,14 +99,35 @@ await json(`${accountBase}/v1/friend-requests/${incoming.request_id}/accept`, {
   body: "{}",
 });
 
-console.log("[5/15] Creating a direct conversation between contacts...");
+console.log("[5/18] Updating Alice's avatar profile...");
+const avatarDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+const aliceWithAvatar = await json(`${accountBase}/v1/profile/avatar`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ avatar_data_url: avatarDataUrl }),
+});
+assert(aliceWithAvatar.avatar_data_url === avatarDataUrl, "avatar update failed");
+
+console.log("[6/18] Saving and reading a contact remark...");
+const bobRemark = `Bob Remark ${stamp}`;
+await json(`${accountBase}/v1/contacts/${bob.account_id}`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ remark_name: bobRemark }),
+});
+const bobContact = await json(`${accountBase}/v1/contacts/${bob.account_id}`, {
+  headers: authorized(aliceSession.access_token, false),
+});
+assert(bobContact.remark_name === bobRemark, "contact remark update failed");
+
+console.log("[7/18] Creating a direct conversation between contacts...");
 const conversation = await json(`${mailboxBase}/v1/conversations/direct`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
   body: JSON.stringify({ peer_account_id: bob.account_id }),
 });
 
-console.log("[6/15] Connecting Bob's authenticated realtime WebSocket...");
+console.log("[8/18] Connecting Bob's authenticated realtime WebSocket...");
 const socket = new WebSocket(
   `${mailboxWs}/v1/ws?access_token=${encodeURIComponent(bobSession.access_token)}`,
 );
@@ -130,7 +151,7 @@ await new Promise((resolve, reject) => {
   );
 });
 
-console.log("[7/15] Sending and receiving a direct message...");
+console.log("[9/18] Sending and receiving a direct message...");
 const directClientId = crypto.randomUUID();
 const directEvent = waitForEvent(
   socket,
@@ -154,7 +175,7 @@ assert(
   "direct realtime event mismatch",
 );
 
-console.log("[8/15] Verifying direct history and unread state...");
+console.log("[10/18] Verifying direct history and unread state...");
 const history = await json(
   `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages?limit=200`,
   { headers: authorized(bobSession.access_token, false) },
@@ -164,7 +185,7 @@ assert(
   "direct message missing from history",
 );
 
-console.log("[9/15] Creating a group with Bob as an initial member...");
+console.log("[11/18] Creating a group with Bob as an initial member...");
 const group = await json(`${mailboxBase}/v1/groups`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
@@ -176,7 +197,17 @@ const group = await json(`${mailboxBase}/v1/groups`, {
 assert(group.group_code?.startsWith("G"), "group code was not generated");
 assert(group.actor_role === "owner", "creator is not the group owner");
 
-console.log("[10/15] Looking the group up by exact Group ID...");
+console.log("[12/18] Verifying common-group discovery for contacts...");
+const commonGroups = await json(
+  `${mailboxBase}/v1/contacts/${bob.account_id}/common-groups`,
+  { headers: authorized(aliceSession.access_token, false) },
+);
+assert(
+  commonGroups.some((item) => item.group_id === group.group_id),
+  "new group was not returned as a common group",
+);
+
+console.log("[13/18] Looking the group up by exact Group ID...");
 const discoveredGroup = await json(
   `${mailboxBase}/v1/groups/lookup?identifier=${encodeURIComponent(group.group_code)}`,
   { headers: authorized(carolSession.access_token, false) },
@@ -184,7 +215,7 @@ const discoveredGroup = await json(
 assert(discoveredGroup.group_id === group.group_id, "exact Group ID lookup failed");
 assert(discoveredGroup.actor_role === null, "Carol should not already be a member");
 
-console.log("[11/15] Carol sends a moderated group join request...");
+console.log("[14/18] Carol sends a moderated group join request...");
 await json(`${mailboxBase}/v1/groups/${group.group_id}/join-requests`, {
   method: "POST",
   headers: authorized(carolSession.access_token),
@@ -199,7 +230,7 @@ assert(
   "Carol's group join request was not marked pending",
 );
 
-console.log("[12/15] Alice reviews and accepts Carol's join request...");
+console.log("[15/18] Alice reviews and accepts Carol's join request...");
 const groupRequests = await json(
   `${mailboxBase}/v1/groups/${group.group_id}/join-requests`,
   { headers: authorized(aliceSession.access_token, false) },
@@ -217,7 +248,7 @@ await json(
   },
 );
 
-console.log("[13/15] Verifying Carol is now a group member...");
+console.log("[16/18] Verifying Carol is now a group member...");
 const carolGroup = await json(`${mailboxBase}/v1/groups/${group.group_id}`, {
   headers: authorized(carolSession.access_token, false),
 });
@@ -231,7 +262,7 @@ assert(
   "approved group did not appear in Carol's conversations",
 );
 
-console.log("[14/15] Sending and receiving a group message...");
+console.log("[17/18] Sending and receiving a group message...");
 const groupClientId = crypto.randomUUID();
 const groupEvent = waitForEvent(
   socket,
@@ -255,7 +286,7 @@ assert(
   "group realtime event mismatch",
 );
 
-console.log("[15/15] Contacts, direct chat, Group ID search, join approval, and group chat passed.");
+console.log("[18/18] Contacts, direct chat, Group ID search, join approval, and group chat passed.");
 console.log(
   JSON.stringify(
     {

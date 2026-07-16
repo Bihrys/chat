@@ -1,7 +1,9 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Account } from "../lib/types";
 import type { Locale, ThemeMode, Translation } from "../lib/preferences";
 import { MoonIcon, SettingsIcon, SunIcon } from "./PreferenceIcons";
+import { UserAvatar } from "./UserAvatar";
+import { AvatarCropper } from "./AvatarCropper";
 
 interface SettingsPanelProps {
   open: boolean;
@@ -11,6 +13,7 @@ interface SettingsPanelProps {
   t: Translation;
   onLocaleChange(locale: Locale): void;
   onThemeChange(theme: ThemeMode): void;
+  onAvatarChange?(avatarDataUrl: string | null): Promise<void>;
   onLogout?(): void;
   onClose(): void;
 }
@@ -25,20 +28,26 @@ export function SettingsPanel({
   t,
   onLocaleChange,
   onThemeChange,
+  onAvatarChange,
   onLogout,
   onClose,
 }: SettingsPanelProps) {
   const [page, setPage] = useState<SettingsPage>(account ? "account" : "general");
+  const closeRef = useRef(onClose);
+
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
     setPage(account ? "account" : "general");
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") onClose();
+      if (event.key === "Escape") closeRef.current();
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [account, onClose, open]);
+  }, [account?.account_id, open]);
 
   if (!open) return null;
 
@@ -78,7 +87,12 @@ export function SettingsPanel({
 
         <div className="settings-content">
           {page === "account" && account ? (
-            <AccountSettings account={account} t={t} onLogout={onLogout} />
+            <AccountSettings
+              account={account}
+              t={t}
+              onAvatarChange={onAvatarChange}
+              onLogout={onLogout}
+            />
           ) : (
             <GeneralSettings
               locale={locale}
@@ -97,17 +111,62 @@ export function SettingsPanel({
 function AccountSettings({
   account,
   t,
+  onAvatarChange,
   onLogout,
 }: {
   account: Account;
   t: Translation;
+  onAvatarChange?: (avatarDataUrl: string | null) => Promise<void>;
   onLogout?: () => void;
 }) {
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [cropSource, setCropSource] = useState<string | null>(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
+
+  function selectFile(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/")) return;
+    const reader = new FileReader();
+    reader.onload = () => setCropSource(String(reader.result));
+    reader.readAsDataURL(file);
+  }
+
+  async function saveAvatar(dataUrl: string) {
+    if (!onAvatarChange) return;
+    setAvatarBusy(true);
+    try {
+      await onAvatarChange(dataUrl);
+      setCropSource(null);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   return (
     <div className="settings-page">
       <section className="settings-card account-settings-card">
         <div className="settings-account-row">
-          <span className="settings-account-avatar">{initials(account.display_name)}</span>
+          <button
+            className="settings-avatar-button"
+            type="button"
+            title={t.changeAvatar}
+            onClick={() => inputRef.current?.click()}
+          >
+            <UserAvatar
+              label={account.display_name}
+              avatarUrl={account.avatar_data_url}
+            />
+            <span>{t.changeAvatar}</span>
+          </button>
+          <input
+            ref={inputRef}
+            type="file"
+            accept="image/png,image/jpeg,image/webp"
+            hidden
+            onChange={(event) => {
+              void selectFile(event.target.files?.[0]);
+              event.currentTarget.value = "";
+            }}
+          />
           <span className="settings-account-copy">
             <strong>{account.display_name}</strong>
             <small>{t.chatId}: {account.chat_id}</small>
@@ -118,6 +177,19 @@ function AccountSettings({
             </button>
           )}
         </div>
+        {account.avatar_data_url && onAvatarChange && (
+          <div className="settings-row compact-row">
+            <span><strong>{t.avatar}</strong></span>
+            <button
+              className="settings-secondary-button"
+              type="button"
+              disabled={avatarBusy}
+              onClick={() => void onAvatarChange(null).catch(() => undefined)}
+            >
+              {t.removeAvatar}
+            </button>
+          </div>
+        )}
         <div className="settings-row">
           <span>
             <strong>{t.accountUuid}</strong>
@@ -144,6 +216,16 @@ function AccountSettings({
           </button>
         </div>
       </section>
+
+      {cropSource && (
+        <AvatarCropper
+          source={cropSource}
+          busy={avatarBusy}
+          t={t}
+          onCancel={() => setCropSource(null)}
+          onSave={saveAvatar}
+        />
+      )}
     </div>
   );
 }
@@ -220,8 +302,4 @@ function GeneralSettings({
       </section>
     </div>
   );
-}
-
-function initials(value: string) {
-  return value.trim().slice(0, 2).toUpperCase() || "?";
 }

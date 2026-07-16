@@ -3,6 +3,9 @@ export interface Account {
   username: string;
   display_name: string;
   chat_id: string;
+  avatar_data_url?: string | null;
+  remark_name?: string | null;
+  source?: string | null;
   created_at: string;
 }
 
@@ -54,6 +57,13 @@ export interface Conversation {
   last_message_at: string | null;
   unread_count: number;
   last_message: ChatMessage | null;
+}
+
+export interface CommonGroup {
+  group_id: string;
+  conversation_id: string;
+  group_code: string;
+  name: string;
 }
 
 export interface GroupMember {

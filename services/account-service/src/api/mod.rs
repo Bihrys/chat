@@ -52,6 +52,16 @@ struct UpdateDisplayNameRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateAvatarRequest {
+    avatar_data_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateContactRequest {
+    remark_name: Option<String>,
+}
+
+#[derive(Deserialize)]
 struct CreateFriendRequest {
     recipient_account_id: Uuid,
     message: Option<String>,
@@ -63,6 +73,9 @@ pub(crate) struct AccountResponse {
     username: String,
     display_name: String,
     chat_id: String,
+    avatar_data_url: Option<String>,
+    remark_name: Option<String>,
+    source: Option<String>,
     created_at: String,
 }
 
@@ -102,6 +115,11 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/accounts/lookup", get(lookup_account))
         .route("/v1/accounts/{account_id}", get(get_account))
         .route("/v1/contacts", get(list_contacts))
+        .route(
+            "/v1/contacts/{account_id}",
+            get(get_contact).patch(update_contact),
+        )
+        .route("/v1/profile/avatar", axum::routing::patch(update_avatar))
         .route(
             "/v1/friend-requests",
             get(list_friend_requests).post(create_friend_request),
@@ -196,6 +214,60 @@ async fn get_account(
     let account = state
         .accounts
         .get(account_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn get_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let account = state
+        .accounts
+        .get_contact(actor, account_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn update_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<UpdateContactRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let remark = request.remark_name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    if remark.is_some_and(|value| value.chars().count() > 64) {
+        return Err(ApiError::bad_request(
+            "invalid_remark_name",
+            "remark name must be at most 64 characters",
+        ));
+    }
+    let account = state
+        .accounts
+        .update_contact_remark(actor, account_id, remark)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn update_avatar(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateAvatarRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let avatar = validate_avatar_data_url(request.avatar_data_url.as_deref())?;
+    let account = state
+        .accounts
+        .update_avatar(actor, avatar)
         .await
         .map_err(internal_error)?
         .ok_or_else(account_not_found)?;
@@ -462,6 +534,34 @@ fn ensure_local_mode() -> Result<(), ApiError> {
     Ok(())
 }
 
+fn validate_avatar_data_url(value: Option<&str>) -> Result<Option<&str>, ApiError> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 700_000 {
+        return Err(ApiError::bad_request(
+            "avatar_too_large",
+            "avatar must be smaller than 700 KB",
+        ));
+    }
+    let allowed = [
+        "data:image/jpeg;base64,",
+        "data:image/png;base64,",
+        "data:image/webp;base64,",
+    ];
+    if !allowed.iter().any(|prefix| value.starts_with(prefix)) {
+        return Err(ApiError::bad_request(
+            "invalid_avatar",
+            "avatar must be a JPEG, PNG, or WebP data URL",
+        ));
+    }
+    Ok(Some(value))
+}
+
 fn account_not_found() -> ApiError {
     ApiError::not_found("account_not_found", "account does not exist")
 }
@@ -478,6 +578,9 @@ impl From<Account> for AccountResponse {
             username: account.username,
             display_name: account.display_name,
             chat_id: account.chat_id,
+            avatar_data_url: account.avatar_data_url,
+            remark_name: account.remark_name,
+            source: account.source,
             created_at: format_time(account.created_at),
         }
     }

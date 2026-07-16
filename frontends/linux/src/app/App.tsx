@@ -15,8 +15,10 @@ import {
   createGroup,
   dissolveGroup,
   getAccount,
+  getContact,
   getCurrentAccount,
   getGroup,
+  listCommonGroups,
   listContacts,
   listConversations,
   listFriendRequests,
@@ -35,11 +37,14 @@ import {
   sendFriendRequest,
   sendMessage,
   setGroupMemberRole,
+  updateAvatar,
+  updateContactRemark,
 } from "../lib/api";
 import type {
   Account,
   AuthSession,
   ChatMessage,
+  CommonGroup,
   Conversation,
   FriendRequestMailbox,
   GroupDetails,
@@ -73,6 +78,8 @@ import {
   SettingsIcon,
 } from "./PreferenceIcons";
 import { SettingsPanel } from "./SettingsPanel";
+import { ContactProfile } from "./ContactProfile";
+import { UserAvatar as Avatar } from "./UserAvatar";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
 const MAX_COMPOSER_HEIGHT = 132;
@@ -108,6 +115,9 @@ export function App() {
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("offline");
   const [primaryView, setPrimaryView] = useState<PrimaryView>("chats");
+  const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
+  const [selectedContact, setSelectedContact] = useState<Account | null>(null);
+  const [commonGroups, setCommonGroups] = useState<CommonGroup[]>([]);
   const [chatSearch, setChatSearch] = useState("");
   const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [draft, setDraft] = useState("");
@@ -152,6 +162,17 @@ export function App() {
     if (activeAccount) map.set(activeAccount.account_id, activeAccount);
     return map;
   }, [activeAccount, contacts, friendRequests, knownAccounts, lookupResult]);
+
+  const accountByIdRef = useRef(accountById);
+  const groupManageOpenRef = useRef(groupManageOpen);
+
+  useEffect(() => {
+    accountByIdRef.current = accountById;
+  }, [accountById]);
+
+  useEffect(() => {
+    groupManageOpenRef.current = groupManageOpen;
+  }, [groupManageOpen]);
 
   const selectedConversation = useMemo(
     () =>
@@ -201,6 +222,9 @@ export function App() {
     setConversations([]);
     setMessages([]);
     setSelectedConversationId(null);
+    setSelectedContactId(null);
+    setSelectedContact(null);
+    setCommonGroups([]);
     setSocketStatus("offline");
   }, []);
 
@@ -320,11 +344,11 @@ export function App() {
                 const details = await loadGroupWithAccounts(
                   accessToken,
                   openGroup.group_id,
-                  accountById,
+                  accountByIdRef.current,
                   mergeKnownAccounts,
                 );
                 setGroupDetails(details);
-                if (groupManageOpen && details.actor_role !== "member") {
+                if (groupManageOpenRef.current && details.actor_role !== "member") {
                   setGroupJoinRequests(
                     await listGroupJoinRequests(accessToken, details.group_id),
                   );
@@ -353,14 +377,43 @@ export function App() {
   }, [
     accessToken,
     activeAccount,
-    accountById,
     appendMessage,
-    groupManageOpen,
     mergeKnownAccounts,
     refreshConversations,
     refreshSocial,
     reportError,
   ]);
+
+  useEffect(() => {
+    if (!accessToken || !selectedContactId) {
+      setSelectedContact(null);
+      setCommonGroups([]);
+      return;
+    }
+    let cancelled = false;
+    void Promise.all([
+      getContact(accessToken, selectedContactId),
+      listCommonGroups(accessToken, selectedContactId),
+    ])
+      .then(([contact, groups]) => {
+        if (cancelled) return;
+        setSelectedContact(contact);
+        setCommonGroups(groups);
+        mergeKnownAccounts([contact]);
+      })
+      .catch((reason) => {
+        if (!cancelled) reportError(reason);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [accessToken, mergeKnownAccounts, reportError, selectedContactId]);
+
+  useEffect(() => {
+    if (!selectedContactId) return;
+    const refreshed = contacts.find((account) => account.account_id === selectedContactId);
+    if (refreshed) setSelectedContact(refreshed);
+  }, [contacts, selectedContactId]);
 
   useEffect(() => {
     if (!accessToken || !selectedConversationId) {
@@ -425,6 +478,7 @@ export function App() {
     const existing = directConversationByPeer.get(peerAccountId);
     if (existing) {
       setSelectedConversationId(existing.conversation_id);
+      setSelectedContactId(null);
       setPrimaryView("chats");
       return;
     }
@@ -434,6 +488,7 @@ export function App() {
       const conversation = await createDirectConversation(accessToken, peerAccountId);
       await refreshConversations(accessToken);
       setSelectedConversationId(conversation.conversation_id);
+      setSelectedContactId(null);
       setPrimaryView("chats");
     } catch (reason) {
       reportError(reason);
@@ -713,6 +768,44 @@ export function App() {
     window.setTimeout(() => setCopied(null), 1_200);
   }
 
+  async function performContactRemark(value: string) {
+    if (!accessToken || !selectedContactId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await updateContactRemark(accessToken, selectedContactId, value);
+      setSelectedContact(updated);
+      setContacts((current) =>
+        current.map((account) =>
+          account.account_id === updated.account_id ? updated : account,
+        ),
+      );
+      mergeKnownAccounts([updated]);
+    } catch (reason) {
+      reportError(reason);
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function performAvatarChange(avatarDataUrl: string | null) {
+    if (!accessToken || !session) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const updated = await updateAvatar(accessToken, avatarDataUrl);
+      saveSession({ ...session, account: updated });
+      mergeKnownAccounts([updated]);
+      setNotice(t.avatarUpdated);
+    } catch (reason) {
+      reportError(reason);
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function performLogout() {
     if (accessToken) {
       try {
@@ -800,8 +893,16 @@ export function App() {
   return (
     <main className="wechat-shell">
       <aside className="app-rail">
-        <button className="rail-avatar" type="button" title={activeAccount.display_name}>
-          {initials(activeAccount.display_name)}
+        <button
+          className="rail-avatar"
+          type="button"
+          title={activeAccount.display_name}
+          onClick={() => setSettingsOpen(true)}
+        >
+          <Avatar
+            label={activeAccount.display_name}
+            avatarUrl={activeAccount.avatar_data_url}
+          />
         </button>
 
         <nav className="rail-nav" aria-label="primary">
@@ -809,7 +910,10 @@ export function App() {
             className={primaryView === "chats" ? "active" : ""}
             type="button"
             title={t.chats}
-            onClick={() => setPrimaryView("chats")}
+            onClick={() => {
+              setPrimaryView("chats");
+              setSelectedContactId(null);
+            }}
           >
             <ChatIcon />
             {totalUnread(conversations) > 0 && (
@@ -820,7 +924,10 @@ export function App() {
             className={primaryView === "contacts" ? "active" : ""}
             type="button"
             title={t.addressBook}
-            onClick={() => setPrimaryView("contacts")}
+            onClick={() => {
+              setPrimaryView("contacts");
+              setSelectedConversationId(null);
+            }}
           >
             <ContactsIcon />
             {pendingIncoming > 0 && (
@@ -898,9 +1005,14 @@ export function App() {
             onToggleGroups={() => setGroupsExpanded((expanded) => !expanded)}
             onOpenRequests={() => setRequestsOpen(true)}
             onOpenDiscovery={() => openDiscovery("friend")}
-            onOpenContact={(accountId) => void openDirectConversation(accountId)}
+            onOpenContact={(accountId) => {
+              setSelectedContactId(accountId);
+              setSelectedConversationId(null);
+              setPrimaryView("contacts");
+            }}
             onOpenGroup={(conversationId) => {
               setSelectedConversationId(conversationId);
+              setSelectedContactId(null);
               setPrimaryView("chats");
             }}
           />
@@ -908,7 +1020,21 @@ export function App() {
       </aside>
 
       <section className="conversation-pane">
-        {selectedConversation ? (
+        {primaryView === "contacts" && selectedContact ? (
+          <ContactProfile
+            account={selectedContact}
+            commonGroups={commonGroups}
+            busy={busy}
+            t={t}
+            onSaveRemark={performContactRemark}
+            onStartChat={() => void openDirectConversation(selectedContact.account_id)}
+            onOpenGroup={(conversationId) => {
+              setSelectedContactId(null);
+              setSelectedConversationId(conversationId);
+              setPrimaryView("chats");
+            }}
+          />
+        ) : selectedConversation ? (
           <>
             <header className="conversation-header">
               <div className="conversation-title-block">
@@ -916,15 +1042,16 @@ export function App() {
                   label={
                     selectedConversation.kind === "group"
                       ? selectedConversation.group_name ?? t.group
-                      : selectedPeer?.display_name ?? t.unknownUser
+                      : contactDisplayName(selectedPeer) ?? t.unknownUser
                   }
+                  avatarUrl={selectedConversation.kind === "direct" ? selectedPeer?.avatar_data_url : null}
                   group={selectedConversation.kind === "group"}
                 />
                 <span>
                   <h1>
                     {selectedConversation.kind === "group"
                       ? selectedConversation.group_name
-                      : selectedPeer?.display_name ?? t.conversation}
+                      : contactDisplayName(selectedPeer) ?? t.conversation}
                   </h1>
                   <small>
                     {selectedConversation.kind === "group"
@@ -965,14 +1092,15 @@ export function App() {
                       >
                         {!mine && (
                           <Avatar
-                            label={sender?.display_name ?? message.sender_account_id}
+                            label={contactDisplayName(sender) ?? message.sender_account_id}
+                            avatarUrl={sender?.avatar_data_url}
                             small
                           />
                         )}
                         <div className="message-body-column">
                           {selectedConversation.kind === "group" && !mine && (
                             <strong className="message-sender">
-                              {sender?.display_name ?? shortUuid(message.sender_account_id)}
+                              {contactDisplayName(sender) ?? shortUuid(message.sender_account_id)}
                             </strong>
                           )}
                           <div className="message-bubble">
@@ -980,7 +1108,13 @@ export function App() {
                           </div>
                           <time>{formatClock(message.created_at)}</time>
                         </div>
-                        {mine && <Avatar label={activeAccount.display_name} small />}
+                        {mine && (
+                          <Avatar
+                            label={activeAccount.display_name}
+                            avatarUrl={activeAccount.avatar_data_url}
+                            small
+                          />
+                        )}
                       </div>
                     );
                   })
@@ -995,11 +1129,6 @@ export function App() {
                 void submitMessage();
               }}
             >
-              <div className="composer-tools">
-                <span>☺</span>
-                <span>□</span>
-                <span>⌁</span>
-              </div>
               <textarea
                 ref={composerRef}
                 value={draft}
@@ -1060,6 +1189,7 @@ export function App() {
         t={t}
         onLocaleChange={setLocale}
         onThemeChange={setTheme}
+        onAvatarChange={performAvatarChange}
         onLogout={() => void performLogout()}
         onClose={() => setSettingsOpen(false)}
       />
@@ -1215,9 +1345,12 @@ function ChatList(props: {
                 type="button"
                 onClick={() => props.onSelectContact(entry.contact.account_id)}
               >
-                <Avatar label={entry.contact.display_name} />
+                <Avatar
+                  label={contactDisplayName(entry.contact)}
+                  avatarUrl={entry.contact.avatar_data_url}
+                />
                 <span className="chat-list-copy">
-                  <strong>{entry.contact.display_name}</strong>
+                  <strong>{contactDisplayName(entry.contact)}</strong>
                   <small>{props.t.startConversationHint}</small>
                 </span>
               </button>
@@ -1236,7 +1369,11 @@ function ChatList(props: {
               type="button"
               onClick={() => props.onSelectConversation(conversation.conversation_id)}
             >
-              <Avatar label={title} group={conversation.kind === "group"} />
+              <Avatar
+                label={title}
+                avatarUrl={conversation.kind === "direct" ? peer?.avatar_data_url : null}
+                group={conversation.kind === "group"}
+              />
               <span className="chat-list-copy">
                 <span className="chat-list-line">
                   <strong>{title}</strong>
@@ -1272,7 +1409,7 @@ function AddressBook(props: {
 }) {
   const query = props.search.trim().toLocaleLowerCase();
   const contacts = props.contacts.filter((contact) =>
-    `${contact.display_name} ${contact.chat_id}`.toLocaleLowerCase().includes(query),
+    `${contactDisplayName(contact)} ${contactDisplayName(contact)} ${contact.chat_id}`.toLocaleLowerCase().includes(query),
   );
   const groups = props.groups.filter((group) =>
     `${group.group_name ?? ""} ${group.group_code ?? ""}`
@@ -1336,9 +1473,12 @@ function AddressBook(props: {
                 key={contact.account_id}
                 onClick={() => props.onOpenContact(contact.account_id)}
               >
-                <Avatar label={contact.display_name} />
+                <Avatar
+                  label={contactDisplayName(contact)}
+                  avatarUrl={contact.avatar_data_url}
+                />
                 <span>
-                  <strong>{contact.display_name}</strong>
+                  <strong>{contactDisplayName(contact)}</strong>
                   <small>{contact.chat_id}</small>
                 </span>
               </button>
@@ -1420,7 +1560,10 @@ function DiscoveryModal(props: {
       {props.mode === "friend" && props.friendResult && (
         <section className="discovery-result">
           <div className="discovery-result-title">
-            <Avatar label={props.friendResult.display_name} />
+            <Avatar
+              label={props.friendResult.display_name}
+              avatarUrl={props.friendResult.avatar_data_url}
+            />
             <span>
               <strong>{props.friendResult.display_name}</strong>
               <small>{props.friendResult.chat_id}</small>
@@ -1520,9 +1663,12 @@ function RequestsView(props: {
       ) : (
         incoming.map((request) => (
           <div className="request-row" key={request.request_id}>
-            <Avatar label={request.peer.display_name} />
+            <Avatar
+              label={contactDisplayName(request.peer)}
+              avatarUrl={request.peer.avatar_data_url}
+            />
             <span className="request-copy">
-              <strong>{request.peer.display_name}</strong>
+              <strong>{contactDisplayName(request.peer)}</strong>
               <small>{request.message}</small>
             </span>
             <button
@@ -1549,9 +1695,12 @@ function RequestsView(props: {
       </div>
       {props.mailbox.outgoing.map((request) => (
         <div className="request-row compact" key={request.request_id}>
-          <Avatar label={request.peer.display_name} />
+          <Avatar
+            label={contactDisplayName(request.peer)}
+            avatarUrl={request.peer.avatar_data_url}
+          />
           <span className="request-copy">
-            <strong>{request.peer.display_name}</strong>
+            <strong>{contactDisplayName(request.peer)}</strong>
             <small>{request.message}</small>
           </span>
           <span className={`status-chip ${request.status}`}>
@@ -1602,9 +1751,13 @@ function CreateGroupModal(props: {
                   props.onToggleContact(account.account_id, event.target.checked)
                 }
               />
-              <Avatar label={account.display_name} small />
+              <Avatar
+                label={contactDisplayName(account)}
+                avatarUrl={account.avatar_data_url}
+                small
+              />
               <span>
-                <strong>{account.display_name}</strong>
+                <strong>{contactDisplayName(account)}</strong>
                 <small>{account.chat_id}</small>
               </span>
             </label>
@@ -1691,7 +1844,10 @@ function GroupManagement(props: {
                 const account = props.accountById.get(request.applicant_account_id);
                 return (
                   <div className="request-row" key={request.request_id}>
-                    <Avatar label={account?.display_name ?? request.applicant_account_id} />
+                    <Avatar
+                      label={contactDisplayName(account) ?? request.applicant_account_id}
+                      avatarUrl={account?.avatar_data_url}
+                    />
                     <span className="request-copy">
                       <strong>{account?.display_name ?? shortUuid(request.applicant_account_id)}</strong>
                       <small>{request.message}</small>
@@ -1732,9 +1888,13 @@ function GroupManagement(props: {
               disabled={props.busy}
               onClick={() => props.onAdd(contact.account_id)}
             >
-              <Avatar label={contact.display_name} small />
+              <Avatar
+                label={contactDisplayName(contact)}
+                avatarUrl={contact.avatar_data_url}
+                small
+              />
               <span>
-                <strong>{contact.display_name}</strong>
+                <strong>{contactDisplayName(contact)}</strong>
                 <small>{contact.chat_id}</small>
               </span>
               <b>＋</b>
@@ -1758,7 +1918,11 @@ function GroupManagement(props: {
             !(props.details.actor_role === "admin" && member.role === "admin");
           return (
             <div className="member-row" key={member.account_id}>
-              <Avatar label={account?.display_name ?? member.account_id} small />
+              <Avatar
+                label={contactDisplayName(account) ?? member.account_id}
+                avatarUrl={account?.avatar_data_url}
+                small
+              />
               <span className="member-copy">
                 <strong>{account?.display_name ?? shortUuid(member.account_id)}</strong>
                 <small>{account?.chat_id ?? shortUuid(member.account_id)}</small>
@@ -1944,26 +2108,6 @@ function Modal(props: {
   );
 }
 
-function Avatar({
-  label,
-  group = false,
-  small = false,
-  large = false,
-}: {
-  label: string;
-  group?: boolean;
-  small?: boolean;
-  large?: boolean;
-}) {
-  return (
-    <span
-      className={`ui-avatar ${group ? "group" : ""} ${small ? "small" : ""} ${large ? "large" : ""}`}
-    >
-      {group ? <GroupIcon /> : initials(label)}
-    </span>
-  );
-}
-
 function LoadingScreen({ t, onOpenSettings }: { t: Translation; onOpenSettings(): void }) {
   return (
     <main className="auth-shell">
@@ -2068,7 +2212,15 @@ function conversationTitle(
 ) {
   return conversation.kind === "group"
     ? conversation.group_name ?? t.group
-    : peer?.display_name ?? t.unknownUser;
+    : contactDisplayName(peer) ?? t.unknownUser;
+}
+
+function contactDisplayName(account: Account): string;
+function contactDisplayName(account: undefined): undefined;
+function contactDisplayName(account: Account | undefined): string | undefined;
+function contactDisplayName(account: Account | undefined): string | undefined {
+  if (!account) return undefined;
+  return account.remark_name?.trim() || account.display_name;
 }
 
 function initials(value: string): string {

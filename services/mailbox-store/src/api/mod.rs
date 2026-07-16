@@ -27,7 +27,7 @@ use crate::{
         validate_group_name, validate_initial_group_members, validate_message_body,
     },
     domain::{
-        ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord, GroupMemberRecord,
+        CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord, GroupMemberRecord,
         GroupRecord, GroupRole, MessageRecord, MessageWire, ServerEvent,
     },
     infrastructure::{ContactVerifier, MailboxRepository},
@@ -187,12 +187,24 @@ struct MarkReadResponse {
     last_read_seq: i64,
 }
 
+#[derive(Debug, Serialize)]
+struct CommonGroupResponse {
+    group_id: Uuid,
+    conversation_id: Uuid,
+    group_code: String,
+    name: String,
+}
+
 pub(crate) fn router(state: AppState) -> Router {
     Router::new()
         .route("/healthz", get(healthz))
         .route("/readyz", get(readyz))
         .route("/v1/conversations", get(list_conversations))
         .route("/v1/conversations/direct", post(create_direct_conversation))
+        .route(
+            "/v1/contacts/{account_id}/common-groups",
+            get(list_common_groups),
+        )
         .route(
             "/v1/conversations/{conversation_id}/messages",
             get(list_messages).post(create_message),
@@ -257,6 +269,21 @@ async fn list_conversations(
         .await
         .map_err(internal_error)?;
     Ok(Json(conversations.into_iter().map(Into::into).collect()))
+}
+
+async fn list_common_groups(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+) -> Result<Json<Vec<CommonGroupResponse>>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_contacts(&state, actor, account_id).await?;
+    let groups = state
+        .mailbox
+        .list_common_groups(actor, account_id)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(groups.into_iter().map(Into::into).collect()))
 }
 
 async fn create_direct_conversation(
@@ -741,6 +768,17 @@ fn group_not_found() -> ApiError {
 fn internal_error(error: anyhow::Error) -> ApiError {
     tracing::error!(?error, "mailbox request failed");
     ApiError::internal("mailbox request failed")
+}
+
+impl From<CommonGroupRecord> for CommonGroupResponse {
+    fn from(group: CommonGroupRecord) -> Self {
+        Self {
+            group_id: group.group_id,
+            conversation_id: group.conversation_id,
+            group_code: group.group_code,
+            name: group.name,
+        }
+    }
 }
 
 impl From<ConversationRecord> for ConversationResponse {

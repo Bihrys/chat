@@ -49,7 +49,7 @@ export function connectChatSocket(
         return;
       }
 
-      callbacks.onStatus("offline");
+      callbacks.onStatus(attempt >= 3 ? "offline" : "connecting");
       const delay = Math.min(10_000, 500 * 2 ** Math.min(attempt, 5));
       attempt += 1;
       reconnectTimer = window.setTimeout(connect, delay);
@@ -64,6 +64,5 @@ export function connectChatSocket(
       window.clearTimeout(reconnectTimer);
     }
     socket?.close();
-    callbacks.onStatus("offline");
   };
 }
