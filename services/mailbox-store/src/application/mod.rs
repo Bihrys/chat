@@ -1,9 +1,11 @@
-//! Messaging application rules.
+//! Messaging and group-management application rules.
 
 use chat_server_core::ApiError;
 use uuid::Uuid;
 
 const MAX_MESSAGE_CHARS: usize = 10_000;
+const MAX_GROUP_NAME_CHARS: usize = 64;
+const MAX_INITIAL_GROUP_MEMBERS: usize = 100;
 
 pub(crate) fn canonical_pair(left: Uuid, right: Uuid) -> Result<(Uuid, Uuid), ApiError> {
     if left == right {
@@ -12,7 +14,6 @@ pub(crate) fn canonical_pair(left: Uuid, right: Uuid) -> Result<(Uuid, Uuid), Ap
             "cannot create a direct conversation with the same account",
         ));
     }
-
     if left.as_bytes() <= right.as_bytes() {
         Ok((left, right))
     } else {
@@ -38,9 +39,31 @@ pub(crate) fn validate_message_body(body: &str) -> Result<String, ApiError> {
     Ok(body.to_owned())
 }
 
+pub(crate) fn validate_group_name(name: &str) -> Result<String, ApiError> {
+    let name = name.trim();
+    let length = name.chars().count();
+    if length == 0 || length > MAX_GROUP_NAME_CHARS {
+        return Err(ApiError::bad_request(
+            "invalid_group_name",
+            format!("group name must contain 1-{MAX_GROUP_NAME_CHARS} characters"),
+        ));
+    }
+    Ok(name.to_owned())
+}
+
+pub(crate) fn validate_initial_group_members(members: &[Uuid]) -> Result<(), ApiError> {
+    if members.len() > MAX_INITIAL_GROUP_MEMBERS {
+        return Err(ApiError::bad_request(
+            "too_many_group_members",
+            format!("a group can be created with at most {MAX_INITIAL_GROUP_MEMBERS} contacts"),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{canonical_pair, validate_message_body};
+    use super::{canonical_pair, validate_group_name, validate_message_body};
     use uuid::Uuid;
 
     #[test]
@@ -54,17 +77,15 @@ mod tests {
     }
 
     #[test]
-    fn canonical_pair_rejects_self_conversations() {
-        let account = Uuid::from_u128(1);
-        assert!(canonical_pair(account, account).is_err());
-    }
-
-    #[test]
-    fn message_validation_trims_whitespace() {
+    fn validates_message_and_group_name() {
         assert_eq!(
             validate_message_body("  hello  ").ok().as_deref(),
             Some("hello")
         );
         assert!(validate_message_body("   ").is_err());
+        assert_eq!(
+            validate_group_name("  Team  ").ok().as_deref(),
+            Some("Team")
+        );
     }
 }

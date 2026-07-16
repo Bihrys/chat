@@ -52,6 +52,7 @@ struct AccountResponse {
     account_id: Uuid,
     username: String,
     display_name: String,
+    chat_id: String,
     created_at: String,
 }
 
@@ -300,6 +301,7 @@ impl From<Account> for AccountResponse {
             account_id: account.account_id,
             username: account.username,
             display_name: account.display_name,
+            chat_id: account.chat_id,
             created_at: format_time(account.created_at),
         }
     }

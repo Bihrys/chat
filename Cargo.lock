@@ -820,6 +820,7 @@ dependencies = [
  "chat-foundation-config",
  "chat-server-core",
  "futures-util",
+ "reqwest",
  "serde",
  "serde_json",
  "sqlx",

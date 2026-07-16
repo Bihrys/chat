@@ -1,17 +1,95 @@
-//! Domain records for the first direct-message vertical slice.
+//! Direct and group conversation domain records for local development.
 
 use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ConversationKind {
+    Direct,
+    Group,
+}
+
+impl ConversationKind {
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Direct => "direct",
+            Self::Group => "group",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GroupRole {
+    Member,
+    Admin,
+    Owner,
+}
+
+impl GroupRole {
+    pub(crate) fn from_i16(value: i16) -> Option<Self> {
+        match value {
+            0 => Some(Self::Member),
+            1 => Some(Self::Admin),
+            2 => Some(Self::Owner),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn as_i16(self) -> i16 {
+        match self {
+            Self::Member => 0,
+            Self::Admin => 1,
+            Self::Owner => 2,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Member => "member",
+            Self::Admin => "admin",
+            Self::Owner => "owner",
+        }
+    }
+
+    pub(crate) const fn can_remove_members(self) -> bool {
+        matches!(self, Self::Admin | Self::Owner)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct ConversationRecord {
     pub(crate) conversation_id: Uuid,
-    pub(crate) peer_account_id: Uuid,
+    pub(crate) kind: ConversationKind,
+    pub(crate) peer_account_id: Option<Uuid>,
+    pub(crate) group_id: Option<Uuid>,
+    pub(crate) group_code: Option<String>,
+    pub(crate) group_name: Option<String>,
+    pub(crate) group_role: Option<GroupRole>,
+    pub(crate) member_count: Option<i64>,
     pub(crate) created_at: OffsetDateTime,
     pub(crate) last_message_at: Option<OffsetDateTime>,
     pub(crate) unread_count: i64,
     pub(crate) last_message: Option<MessageRecord>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GroupMemberRecord {
+    pub(crate) account_id: Uuid,
+    pub(crate) role: GroupRole,
+    pub(crate) joined_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GroupRecord {
+    pub(crate) group_id: Uuid,
+    pub(crate) conversation_id: Uuid,
+    pub(crate) group_code: String,
+    pub(crate) name: String,
+    pub(crate) owner_account_id: Uuid,
+    pub(crate) actor_role: GroupRole,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) members: Vec<GroupMemberRecord>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -40,6 +118,9 @@ pub(crate) enum ServerEvent {
         conversation_id: Uuid,
         account_id: Uuid,
         last_read_seq: i64,
+    },
+    GroupUpdated {
+        group_id: Uuid,
     },
 }
 

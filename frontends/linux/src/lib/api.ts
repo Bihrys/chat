@@ -8,65 +8,53 @@ import type {
   AuthSession,
   ChatMessage,
   Conversation,
+  FriendRequestMailbox,
+  GroupDetails,
+  GroupRole,
 } from "./types";
 
 export class ApiError extends Error {
-  readonly code: string;
-  readonly status: number;
-
-  constructor(status: number, code: string, message: string) {
+  constructor(
+    public readonly status: number,
+    public readonly code: string,
+    message: string,
+  ) {
     super(message);
     this.name = "ApiError";
-    this.status = status;
-    this.code = code;
   }
 }
 
-interface ErrorPayload {
-  code?: string;
-  message?: string;
-}
-
-async function requestJson<T>(
-  url: string,
-  init?: RequestInit,
-): Promise<T> {
+async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
   let response: Response;
   try {
     response = await fetch(url, init);
   } catch {
-    const origin = new URL(url).origin;
     throw new ApiError(
       0,
       "service_unreachable",
-      `Cannot reach the local chat service at ${origin}. Run cargo xtask chat up and cargo xtask chat status.`,
+      `Unable to reach local service at ${new URL(url).origin}. Start it with cargo xtask chat up.`,
     );
   }
-
+  const text = await response.text();
   if (!response.ok) {
-    let payload: ErrorPayload = {};
+    let code = "request_failed";
+    let message = text || `HTTP ${response.status}`;
     try {
-      payload = (await response.json()) as ErrorPayload;
+      const payload = JSON.parse(text) as { code?: string; message?: string };
+      code = payload.code ?? code;
+      message = payload.message ?? message;
     } catch {
-      // The service might be down or return a non-JSON proxy error.
+      // Preserve the raw response when it is not JSON.
     }
-    throw new ApiError(
-      response.status,
-      payload.code ?? "request_failed",
-      payload.message ?? `Request failed with HTTP ${response.status}`,
-    );
+    throw new ApiError(response.status, code, message);
   }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  return (await response.json()) as T;
+  return (text ? JSON.parse(text) : undefined) as T;
 }
 
-function bearerHeaders(accessToken: string, jsonBody = false): HeadersInit {
+function bearerHeaders(accessToken: string, json = false): HeadersInit {
   return {
-    ...(jsonBody ? { "Content-Type": "application/json" } : {}),
-    Authorization: `Bearer ${accessToken}`,
+    authorization: `Bearer ${accessToken}`,
+    ...(json ? { "content-type": "application/json" } : {}),
   };
 }
 
@@ -110,18 +98,64 @@ export async function logoutAccount(accessToken: string): Promise<void> {
   });
 }
 
-export async function listAccounts(
+export async function listContacts(accessToken: string): Promise<Account[]> {
+  return requestJson<Account[]>(`${ACCOUNT_SERVICE_URL}/v1/contacts`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function lookupAccount(
   accessToken: string,
-  query = "",
-): Promise<Account[]> {
-  const params = new URLSearchParams();
-  if (query.trim()) {
-    params.set("query", query.trim());
-  }
-  params.set("limit", "100");
-  return requestJson<Account[]>(
-    `${ACCOUNT_SERVICE_URL}/v1/accounts?${params.toString()}`,
+  identifier: string,
+): Promise<Account> {
+  const params = new URLSearchParams({ identifier: identifier.trim() });
+  return requestJson<Account>(
+    `${ACCOUNT_SERVICE_URL}/v1/accounts/lookup?${params.toString()}`,
     { headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function getAccount(
+  accessToken: string,
+  accountId: string,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/accounts/${accountId}`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function listFriendRequests(
+  accessToken: string,
+): Promise<FriendRequestMailbox> {
+  return requestJson<FriendRequestMailbox>(
+    `${ACCOUNT_SERVICE_URL}/v1/friend-requests`,
+    { headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function sendFriendRequest(
+  accessToken: string,
+  recipientAccountId: string,
+  message: string,
+): Promise<{ request_id: string }> {
+  return requestJson<{ request_id: string }>(`${ACCOUNT_SERVICE_URL}/v1/friend-requests`, {
+    method: "POST",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({
+      recipient_account_id: recipientAccountId,
+      message,
+    }),
+  });
+}
+
+export async function respondFriendRequest(
+  accessToken: string,
+  requestId: string,
+  response: "accept" | "reject",
+): Promise<void> {
+  await requestJson<void>(
+    `${ACCOUNT_SERVICE_URL}/v1/friend-requests/${requestId}/${response}`,
+    { method: "POST", headers: bearerHeaders(accessToken, true), body: "{}" },
   );
 }
 
@@ -147,6 +181,76 @@ export async function createDirectConversation(
   );
 }
 
+export async function createGroup(
+  accessToken: string,
+  name: string,
+  memberAccountIds: string[],
+): Promise<GroupDetails> {
+  return requestJson<GroupDetails>(`${MAILBOX_SERVICE_URL}/v1/groups`, {
+    method: "POST",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ name, member_account_ids: memberAccountIds }),
+  });
+}
+
+export async function getGroup(
+  accessToken: string,
+  groupId: string,
+): Promise<GroupDetails> {
+  return requestJson<GroupDetails>(`${MAILBOX_SERVICE_URL}/v1/groups/${groupId}`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function addGroupMember(
+  accessToken: string,
+  groupId: string,
+  accountId: string,
+): Promise<void> {
+  await requestJson<void>(`${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/members`, {
+    method: "POST",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ account_id: accountId }),
+  });
+}
+
+export async function removeGroupMember(
+  accessToken: string,
+  groupId: string,
+  accountId: string,
+): Promise<void> {
+  await requestJson<void>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/members/${accountId}`,
+    { method: "DELETE", headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function setGroupMemberRole(
+  accessToken: string,
+  groupId: string,
+  accountId: string,
+  role: Exclude<GroupRole, "owner">,
+): Promise<void> {
+  await requestJson<void>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/members/${accountId}/role`,
+    {
+      method: "POST",
+      headers: bearerHeaders(accessToken, true),
+      body: JSON.stringify({ role }),
+    },
+  );
+}
+
+export async function dissolveGroup(
+  accessToken: string,
+  groupId: string,
+): Promise<void> {
+  await requestJson<void>(`${MAILBOX_SERVICE_URL}/v1/groups/${groupId}`, {
+    method: "DELETE",
+    headers: bearerHeaders(accessToken),
+  });
+}
+
 export async function listMessages(
   accessToken: string,
   conversationId: string,
@@ -169,10 +273,7 @@ export async function sendMessage(
     {
       method: "POST",
       headers: bearerHeaders(accessToken, true),
-      body: JSON.stringify({
-        client_message_id: clientMessageId,
-        body,
-      }),
+      body: JSON.stringify({ client_message_id: clientMessageId, body }),
     },
   );
 }
@@ -183,10 +284,6 @@ export async function markConversationRead(
 ): Promise<void> {
   await requestJson<{ conversation_id: string; last_read_seq: number }>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/read`,
-    {
-      method: "POST",
-      headers: bearerHeaders(accessToken, true),
-      body: "{}",
-    },
+    { method: "POST", headers: bearerHeaders(accessToken, true), body: "{}" },
   );
 }

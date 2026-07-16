@@ -1,9 +1,4 @@
-//! Public development API for the first complete one-to-one chat loop.
-//!
-//! This API is intentionally available only in `CHAT_ENV=local`. Requests are
-//! authenticated with opaque bearer sessions issued by `auth-service`. Message
-//! payloads are still plaintext in this development phase; the authentication
-//! boundary can remain when the payload is replaced by an E2EE envelope.
+//! Authenticated local-development direct and group chat API.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -16,7 +11,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     middleware,
     response::Response,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -27,9 +22,14 @@ use uuid::Uuid;
 use chat_server_core::{ApiError, auth::SessionVerifier, local_dev_cors};
 
 use crate::{
-    application::{canonical_pair, validate_message_body},
-    domain::{ConversationRecord, MessageRecord, MessageWire, ServerEvent},
-    infrastructure::MailboxRepository,
+    application::{
+        canonical_pair, validate_group_name, validate_initial_group_members, validate_message_body,
+    },
+    domain::{
+        ConversationRecord, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord, MessageWire,
+        ServerEvent,
+    },
+    infrastructure::{ContactVerifier, MailboxRepository},
 };
 
 const DEFAULT_HISTORY_LIMIT: u16 = 100;
@@ -39,6 +39,7 @@ const MAX_HISTORY_LIMIT: u16 = 200;
 pub(crate) struct AppState {
     pub(crate) mailbox: MailboxRepository,
     pub(crate) sessions: SessionVerifier,
+    pub(crate) contacts: ContactVerifier,
     pub(crate) events: EventHub,
 }
 
@@ -60,7 +61,6 @@ impl EventHub {
         if let Some(sender) = self.channels.read().await.get(&account_id).cloned() {
             return sender;
         }
-
         let mut channels = self.channels.write().await;
         channels
             .entry(account_id)
@@ -91,14 +91,56 @@ struct WebSocketQuery {
     access_token: String,
 }
 
+#[derive(Debug, Deserialize)]
+struct CreateGroupRequest {
+    name: String,
+    #[serde(default)]
+    member_account_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AddGroupMemberRequest {
+    account_id: Uuid,
+}
+
+#[derive(Debug, Deserialize)]
+struct SetGroupRoleRequest {
+    role: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct ConversationResponse {
     conversation_id: Uuid,
-    peer_account_id: Uuid,
+    kind: &'static str,
+    peer_account_id: Option<Uuid>,
+    group_id: Option<Uuid>,
+    group_code: Option<String>,
+    group_name: Option<String>,
+    group_role: Option<&'static str>,
+    member_count: Option<i64>,
     created_at: String,
     last_message_at: Option<String>,
     unread_count: i64,
     last_message: Option<MessageWire>,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupMemberResponse {
+    account_id: Uuid,
+    role: &'static str,
+    joined_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupResponse {
+    group_id: Uuid,
+    conversation_id: Uuid,
+    group_code: String,
+    name: String,
+    owner_account_id: Uuid,
+    actor_role: &'static str,
+    created_at: String,
+    members: Vec<GroupMemberResponse>,
 }
 
 #[derive(Debug, Serialize)]
@@ -118,6 +160,20 @@ pub(crate) fn router(state: AppState) -> Router {
             get(list_messages).post(create_message),
         )
         .route("/v1/conversations/{conversation_id}/read", post(mark_read))
+        .route("/v1/groups", post(create_group))
+        .route(
+            "/v1/groups/{group_id}",
+            get(get_group).delete(dissolve_group),
+        )
+        .route("/v1/groups/{group_id}/members", post(add_group_member))
+        .route(
+            "/v1/groups/{group_id}/members/{account_id}",
+            delete(remove_group_member),
+        )
+        .route(
+            "/v1/groups/{group_id}/members/{account_id}/role",
+            post(set_group_member_role),
+        )
         .route("/v1/ws", get(websocket_upgrade))
         .with_state(state)
         .layer(middleware::from_fn(local_dev_cors))
@@ -134,7 +190,7 @@ async fn readyz(State(state): State<AppState>) -> Result<&'static str, ApiError>
     })?;
     state.sessions.healthcheck().await.map_err(|error| {
         tracing::error!(?error, "mailbox authentication readiness check failed");
-        ApiError::internal("authentication database unavailable")
+        ApiError::internal("authentication service unavailable")
     })?;
     Ok("ready")
 }
@@ -149,13 +205,7 @@ async fn list_conversations(
         .list_conversations(actor)
         .await
         .map_err(internal_error)?;
-
-    Ok(Json(
-        conversations
-            .into_iter()
-            .map(ConversationResponse::from)
-            .collect(),
-    ))
+    Ok(Json(conversations.into_iter().map(Into::into).collect()))
 }
 
 async fn create_direct_conversation(
@@ -165,17 +215,13 @@ async fn create_direct_conversation(
 ) -> Result<(StatusCode, Json<ConversationResponse>), ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     canonical_pair(actor, request.peer_account_id)?;
-
+    ensure_contacts(&state, actor, request.peer_account_id).await?;
     let conversation = state
         .mailbox
         .create_direct_conversation(actor, request.peer_account_id)
         .await
         .map_err(internal_error)?;
-
-    Ok((
-        StatusCode::CREATED,
-        Json(ConversationResponse::from(conversation)),
-    ))
+    Ok((StatusCode::CREATED, Json(conversation.into())))
 }
 
 async fn list_messages(
@@ -186,7 +232,6 @@ async fn list_messages(
 ) -> Result<Json<Vec<MessageWire>>, ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
-
     let limit = i64::from(
         query
             .limit
@@ -198,7 +243,6 @@ async fn list_messages(
         .list_messages(conversation_id, query.before_seq, limit)
         .await
         .map_err(internal_error)?;
-
     Ok(Json(messages.into_iter().map(message_to_wire).collect()))
 }
 
@@ -211,29 +255,23 @@ async fn create_message(
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
     let body = validate_message_body(&request.body)?;
-
     let message = state
         .mailbox
         .insert_message(conversation_id, actor, request.client_message_id, &body)
         .await
         .map_err(internal_error)?;
     let message_wire = message_to_wire(message);
-
     let members = state
         .mailbox
         .conversation_members(conversation_id)
         .await
-        .map_err(internal_error)?
-        .ok_or_else(|| {
-            ApiError::not_found("conversation_not_found", "conversation does not exist")
-        })?;
-
+        .map_err(internal_error)?;
     let event = ServerEvent::MessageCreated {
         message: message_wire.clone(),
     };
-    state.events.publish(members.0, event.clone()).await;
-    state.events.publish(members.1, event).await;
-
+    for member in members {
+        state.events.publish(member, event.clone()).await;
+    }
     Ok((StatusCode::CREATED, Json(message_wire)))
 }
 
@@ -244,32 +282,196 @@ async fn mark_read(
 ) -> Result<Json<MarkReadResponse>, ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
-
     let last_read_seq = state
         .mailbox
         .mark_read(conversation_id, actor)
         .await
         .map_err(internal_error)?;
-
-    if let Some(members) = state
+    let members = state
         .mailbox
         .conversation_members(conversation_id)
         .await
-        .map_err(internal_error)?
-    {
-        let event = ServerEvent::ConversationRead {
-            conversation_id,
-            account_id: actor,
-            last_read_seq,
-        };
-        state.events.publish(members.0, event.clone()).await;
-        state.events.publish(members.1, event).await;
+        .map_err(internal_error)?;
+    let event = ServerEvent::ConversationRead {
+        conversation_id,
+        account_id: actor,
+        last_read_seq,
+    };
+    for member in members {
+        state.events.publish(member, event.clone()).await;
     }
-
     Ok(Json(MarkReadResponse {
         conversation_id,
         last_read_seq,
     }))
+}
+
+async fn create_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<CreateGroupRequest>,
+) -> Result<(StatusCode, Json<GroupResponse>), ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let name = validate_group_name(&request.name)?;
+    validate_initial_group_members(&request.member_account_ids)?;
+    for member in &request.member_account_ids {
+        if *member != actor {
+            ensure_contacts(&state, actor, *member).await?;
+        }
+    }
+    let group = state
+        .mailbox
+        .create_group(actor, &name, &request.member_account_ids)
+        .await
+        .map_err(internal_error)?;
+    let event = ServerEvent::GroupUpdated {
+        group_id: group.group_id,
+    };
+    for member in &group.members {
+        state.events.publish(member.account_id, event.clone()).await;
+    }
+    Ok((StatusCode::CREATED, Json(group.into())))
+}
+
+async fn get_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<Uuid>,
+) -> Result<Json<GroupResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let group = state
+        .mailbox
+        .get_group(group_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(group_not_found)?;
+    Ok(Json(group.into()))
+}
+
+async fn add_group_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<Uuid>,
+    Json(request): Json<AddGroupMemberRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_contacts(&state, actor, request.account_id).await?;
+    if !state
+        .mailbox
+        .add_group_member(group_id, actor, request.account_id)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::conflict(
+            "group_member_not_added",
+            "group does not exist or account is already a member",
+        ));
+    }
+    publish_group_update(&state, group_id, actor, Some(request.account_id)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_group_member(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((group_id, account_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    if !state
+        .mailbox
+        .remove_group_member(group_id, actor, account_id)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::forbidden(
+            "you are not allowed to remove this group member",
+        ));
+    }
+    publish_group_update(&state, group_id, actor, Some(account_id)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn set_group_member_role(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((group_id, account_id)): Path<(Uuid, Uuid)>,
+    Json(request): Json<SetGroupRoleRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let role = match request.role.as_str() {
+        "admin" => GroupRole::Admin,
+        "member" => GroupRole::Member,
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_group_role",
+                "role must be admin or member",
+            ));
+        }
+    };
+    if !state
+        .mailbox
+        .set_group_member_role(group_id, actor, account_id, role)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::forbidden(
+            "only the group owner can change administrator roles",
+        ));
+    }
+    publish_group_update(&state, group_id, actor, None).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn dissolve_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let members = state
+        .mailbox
+        .get_group(group_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(group_not_found)?
+        .members;
+    if !state
+        .mailbox
+        .dissolve_group(group_id, actor)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::forbidden(
+            "only the group owner can dissolve the group",
+        ));
+    }
+    let event = ServerEvent::GroupUpdated { group_id };
+    for member in members {
+        state.events.publish(member.account_id, event.clone()).await;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn publish_group_update(
+    state: &AppState,
+    group_id: Uuid,
+    actor: Uuid,
+    extra_account: Option<Uuid>,
+) -> Result<(), ApiError> {
+    let group = state
+        .mailbox
+        .get_group(group_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(group_not_found)?;
+    let event = ServerEvent::GroupUpdated { group_id };
+    for member in group.members {
+        state.events.publish(member.account_id, event.clone()).await;
+    }
+    if let Some(account_id) = extra_account {
+        state.events.publish(account_id, event).await;
+    }
+    Ok(())
 }
 
 async fn websocket_upgrade(
@@ -289,12 +491,10 @@ async fn websocket_upgrade(
 async fn websocket_session(socket: WebSocket, state: AppState, account_id: Uuid) {
     let (mut sender, mut receiver) = socket.split();
     let mut events = state.events.subscribe(account_id).await;
-
     let connected = ServerEvent::Connected { account_id };
     if !send_event(&mut sender, &connected).await {
         return;
     }
-
     loop {
         tokio::select! {
             incoming = receiver.next() => {
@@ -315,7 +515,7 @@ async fn websocket_session(socket: WebSocket, state: AppState, account_id: Uuid)
                         }
                     }
                     Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        tracing::warn!(%account_id, skipped, "websocket event receiver lagged; client should refresh state");
+                        tracing::warn!(%account_id, skipped, "websocket receiver lagged");
                     }
                     Err(broadcast::error::RecvError::Closed) => break,
                 }
@@ -332,8 +532,21 @@ where
         tracing::error!("failed to serialize websocket event");
         return false;
     };
-
     sender.send(Message::Text(serialized.into())).await.is_ok()
+}
+
+async fn ensure_contacts(state: &AppState, left: Uuid, right: Uuid) -> Result<(), ApiError> {
+    if !state
+        .contacts
+        .are_contacts(left, right)
+        .await
+        .map_err(internal_error)?
+    {
+        return Err(ApiError::forbidden(
+            "add this account as a contact before starting or inviting to a chat",
+        ));
+    }
+    Ok(())
 }
 
 async fn ensure_member(
@@ -341,13 +554,12 @@ async fn ensure_member(
     conversation_id: Uuid,
     actor: Uuid,
 ) -> Result<(), ApiError> {
-    let is_member = state
+    if !state
         .mailbox
         .ensure_member(conversation_id, actor)
         .await
-        .map_err(internal_error)?;
-
-    if !is_member {
+        .map_err(internal_error)?
+    {
         return Err(ApiError::not_found(
             "conversation_not_found",
             "conversation does not exist",
@@ -369,10 +581,14 @@ fn ensure_local_mode() -> Result<(), ApiError> {
     let environment = chat_foundation_config::optional("CHAT_ENV");
     if environment.as_deref() != Some("local") {
         return Err(ApiError::forbidden(
-            "development plaintext chat API is available only when CHAT_ENV=local",
+            "development chat API is available only when CHAT_ENV=local",
         ));
     }
     Ok(())
+}
+
+fn group_not_found() -> ApiError {
+    ApiError::not_found("group_not_found", "group does not exist")
 }
 
 fn internal_error(error: anyhow::Error) -> ApiError {
@@ -384,11 +600,42 @@ impl From<ConversationRecord> for ConversationResponse {
     fn from(conversation: ConversationRecord) -> Self {
         Self {
             conversation_id: conversation.conversation_id,
+            kind: conversation.kind.as_str(),
             peer_account_id: conversation.peer_account_id,
+            group_id: conversation.group_id,
+            group_code: conversation.group_code,
+            group_name: conversation.group_name,
+            group_role: conversation.group_role.map(GroupRole::as_str),
+            member_count: conversation.member_count,
             created_at: format_time(conversation.created_at),
             last_message_at: conversation.last_message_at.map(format_time),
             unread_count: conversation.unread_count,
             last_message: conversation.last_message.map(message_to_wire),
+        }
+    }
+}
+
+impl From<GroupMemberRecord> for GroupMemberResponse {
+    fn from(member: GroupMemberRecord) -> Self {
+        Self {
+            account_id: member.account_id,
+            role: member.role.as_str(),
+            joined_at: format_time(member.joined_at),
+        }
+    }
+}
+
+impl From<GroupRecord> for GroupResponse {
+    fn from(group: GroupRecord) -> Self {
+        Self {
+            group_id: group.group_id,
+            conversation_id: group.conversation_id,
+            group_code: group.group_code,
+            name: group.name,
+            owner_account_id: group.owner_account_id,
+            actor_role: group.actor_role.as_str(),
+            created_at: format_time(group.created_at),
+            members: group.members.into_iter().map(Into::into).collect(),
         }
     }
 }

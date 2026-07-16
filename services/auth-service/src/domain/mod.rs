@@ -8,6 +8,7 @@ pub(crate) struct Account {
     pub(crate) account_id: Uuid,
     pub(crate) username: String,
     pub(crate) display_name: String,
+    pub(crate) chat_id: String,
     pub(crate) created_at: OffsetDateTime,
 }
 

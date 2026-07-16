@@ -1,17 +1,11 @@
-//! Account-directory validation and query rules.
+//! Account, exact lookup, friend-request, and contact validation rules.
 
 use chat_server_core::ApiError;
 
 const USERNAME_MIN: usize = 3;
 const USERNAME_MAX: usize = 32;
 const DISPLAY_NAME_MAX: usize = 64;
-
-pub(crate) fn normalize_search_query(query: Option<&str>) -> Option<String> {
-    query
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| value.to_ascii_lowercase())
-}
+const FRIEND_REQUEST_MESSAGE_MAX: usize = 240;
 
 pub(crate) fn validate_internal_account(
     username: &str,
@@ -43,23 +37,44 @@ pub(crate) fn validate_display_name(display_name: &str) -> Result<(), ApiError> 
     Ok(())
 }
 
+pub(crate) fn validate_lookup_identifier(identifier: &str) -> Result<String, ApiError> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() || identifier.len() > 64 {
+        return Err(ApiError::bad_request(
+            "invalid_identifier",
+            "enter an exact chat ID or account UUID",
+        ));
+    }
+    Ok(identifier.to_owned())
+}
+
+pub(crate) fn validate_friend_request_message(message: &str) -> Result<String, ApiError> {
+    let message = message.trim();
+    let length = message.chars().count();
+    if length == 0 || length > FRIEND_REQUEST_MESSAGE_MAX {
+        return Err(ApiError::bad_request(
+            "invalid_friend_request_message",
+            format!(
+                "friend request message must contain 1-{FRIEND_REQUEST_MESSAGE_MAX} characters"
+            ),
+        ));
+    }
+    Ok(message.to_owned())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{normalize_search_query, validate_internal_account};
-
-    #[test]
-    fn trims_and_normalizes_search_queries() {
-        assert_eq!(
-            normalize_search_query(Some("  ALIce  ")).as_deref(),
-            Some("alice")
-        );
-        assert_eq!(normalize_search_query(Some("   ")), None);
-        assert_eq!(normalize_search_query(None), None);
-    }
+    use super::{validate_friend_request_message, validate_internal_account};
 
     #[test]
     fn validates_internal_account_contract() {
         assert!(validate_internal_account("Alice_01", "alice_01", "Alice").is_ok());
         assert!(validate_internal_account("Alice-01", "alice-01", "Alice").is_err());
+    }
+
+    #[test]
+    fn validates_friend_request_message() {
+        assert!(validate_friend_request_message("Hi, I am Alice").is_ok());
+        assert!(validate_friend_request_message("   ").is_err());
     }
 }
