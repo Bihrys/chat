@@ -29,12 +29,29 @@ import type {
   SocketStatus,
 } from "../lib/types";
 import { connectChatSocket } from "../lib/ws";
+import {
+  applyDocumentPreferences,
+  readStoredLocale,
+  readStoredTheme,
+  storeLocale,
+  storeTheme,
+  translations,
+  type Locale,
+  type ThemeMode,
+  type Translation,
+} from "../lib/preferences";
+import { SettingsIcon } from "./PreferenceIcons";
+import { SettingsPanel } from "./SettingsPanel";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
 const MAX_COMPOSER_HEIGHT = 132;
 
 export function App() {
   const [backend, setBackend] = useState("checking");
+  const [locale, setLocale] = useState<Locale>(readStoredLocale);
+  const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const t = translations[locale];
   const [session, setSession] = useState<AuthSession | null>(readStoredSession);
   const [authChecking, setAuthChecking] = useState(session !== null);
   const [accounts, setAccounts] = useState<Account[]>([]);
@@ -72,6 +89,12 @@ export function App() {
   const peer = selectedConversation
     ? accountById.get(selectedConversation.peer_account_id)
     : undefined;
+
+  useLayoutEffect(() => {
+    applyDocumentPreferences(locale, theme);
+    storeLocale(locale);
+    storeTheme(theme);
+  }, [locale, theme]);
 
   const saveSession = useCallback((next: AuthSession) => {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
@@ -357,14 +380,30 @@ export function App() {
   }
 
   if (authChecking && !activeAccount) {
-    return <LoadingScreen />;
+    return (
+      <>
+        <LoadingScreen t={t} onOpenSettings={() => setSettingsOpen(true)} />
+        <SettingsPanel
+          open={settingsOpen}
+          locale={locale}
+          theme={theme}
+          t={t}
+          onLocaleChange={setLocale}
+          onThemeChange={setTheme}
+          onClose={() => setSettingsOpen(false)}
+        />
+      </>
+    );
   }
 
   if (!session || !activeAccount) {
     return (
+      <>
       <AuthScreen
         busy={busy}
         error={error}
+        t={t}
+        onOpenSettings={() => setSettingsOpen(true)}
         onLogin={async (username, password) => {
           setBusy(true);
           setError(null);
@@ -390,6 +429,16 @@ export function App() {
           }
         }}
       />
+      <SettingsPanel
+        open={settingsOpen}
+        locale={locale}
+        theme={theme}
+        t={t}
+        onLocaleChange={setLocale}
+        onThemeChange={setTheme}
+        onClose={() => setSettingsOpen(false)}
+      />
+      </>
     );
   }
 
@@ -402,34 +451,47 @@ export function App() {
             <strong>{activeAccount.display_name}</strong>
             <span>@{activeAccount.username}</span>
           </div>
-          <button
-            className="icon-button"
-            title="Log out"
-            onClick={() => void performLogout()}
-          >
-            ⎋
-          </button>
+          <div className="account-actions">
+            <button
+              className="icon-button"
+              type="button"
+              title={t.settings}
+              aria-label={t.settings}
+              onClick={() => setSettingsOpen(true)}
+            >
+              <SettingsIcon />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              title={t.logout}
+              aria-label={t.logout}
+              onClick={() => void performLogout()}
+            >
+              ⎋
+            </button>
+          </div>
         </header>
 
         <div className="connection-strip">
           <span className={`status-dot ${socketStatus}`} />
-          <span>{socketStatusLabel(socketStatus)}</span>
-          <span className="backend-state">Rust core: {backend}</span>
+          <span>{socketStatusLabel(socketStatus, t)}</span>
+          <span className="backend-state">{t.rustCore}: {backend}</span>
         </div>
 
         <section className="directory-panel">
-          <label htmlFor="directory-search">Start a conversation</label>
+          <label htmlFor="directory-search">{t.startConversation}</label>
           <input
             id="directory-search"
             value={directoryQuery}
             onChange={(event) => setDirectoryQuery(event.target.value)}
-            placeholder="Search registered users"
+            placeholder={t.searchRegisteredUsers}
             autoComplete="off"
           />
           {directoryQuery && (
             <div className="directory-results">
               {directoryResults.length === 0 ? (
-                <p className="empty-small">No matching registered users.</p>
+                <p className="empty-small">{t.noMatchingUsers}</p>
               ) : (
                 directoryResults.map((account) => (
                   <button
@@ -452,14 +514,14 @@ export function App() {
           )}
         </section>
 
-        <nav className="conversation-list" aria-label="Conversations">
+        <nav className="conversation-list" aria-label={t.conversations}>
           <div className="section-title">
-            <span>Messages</span>
+            <span>{t.messages}</span>
             <span>{conversations.length}</span>
           </div>
           {conversations.length === 0 ? (
             <p className="empty-sidebar">
-              Search for another registered user above to start the first chat.
+              {t.noConversations}
             </p>
           ) : (
             conversations.map((conversation) => {
@@ -487,12 +549,12 @@ export function App() {
                   <span className="conversation-copy">
                     <span className="conversation-topline">
                       <strong>
-                        {conversationPeer?.display_name ?? "Unknown user"}
+                        {conversationPeer?.display_name ?? t.unknownUser}
                       </strong>
-                      <time>{relativeTime(conversation.last_message_at)}</time>
+                      <time>{relativeTime(conversation.last_message_at, locale)}</time>
                     </span>
                     <span className="conversation-preview">
-                      {conversation.last_message?.body ?? "No messages yet"}
+                      {conversation.last_message?.body ?? t.noMessagesYet}
                     </span>
                   </span>
                   {conversation.unread_count > 0 && (
@@ -514,10 +576,10 @@ export function App() {
           <>
             <header className="chat-header">
               <div>
-                <h1>{peer?.display_name ?? "Conversation"}</h1>
+                <h1>{peer?.display_name ?? t.conversation}</h1>
                 <p>{peer ? `@${peer.username}` : selectedConversation.peer_account_id}</p>
               </div>
-              <span className="dev-pill">PLAINTEXT DEV V0</span>
+              <span className="dev-pill">{t.plaintextDev}</span>
             </header>
 
             <div className="message-scroll" ref={messageScrollRef}>
@@ -525,8 +587,8 @@ export function App() {
                 {messages.length === 0 ? (
                   <div className="empty-chat">
                     <div className="empty-icon">✦</div>
-                    <h2>No messages yet</h2>
-                    <p>Send the first message in this local development chat.</p>
+                    <h2>{t.emptyMessagesTitle}</h2>
+                    <p>{t.emptyMessagesBody}</p>
                   </div>
                 ) : (
                   messages.map((message) => (
@@ -570,7 +632,7 @@ export function App() {
                     void submitMessage();
                   }
                 }}
-                placeholder="Write a message"
+                placeholder={t.writeMessage}
                 rows={1}
                 maxLength={8_000}
               />
@@ -579,19 +641,15 @@ export function App() {
                 type="submit"
                 disabled={busy || !draft.trim()}
               >
-                Send
+                {t.send}
               </button>
             </form>
           </>
         ) : (
           <div className="empty-chat landing">
             <div className="empty-icon">⌁</div>
-            <h1>Secure Chat</h1>
-            <p>
-              Choose a conversation or search for another registered user. The
-              current message payload remains plaintext only for this local
-              development stage.
-            </p>
+            <h1>{t.appName}</h1>
+            <p>{t.landingBody}</p>
           </div>
         )}
 
@@ -603,6 +661,15 @@ export function App() {
           </button>
         )}
       </section>
+      <SettingsPanel
+        open={settingsOpen}
+        locale={locale}
+        theme={theme}
+        t={t}
+        onLocaleChange={setLocale}
+        onThemeChange={setTheme}
+        onClose={() => setSettingsOpen(false)}
+      />
     </main>
   );
 }
@@ -610,6 +677,8 @@ export function App() {
 interface AuthScreenProps {
   busy: boolean;
   error: string | null;
+  t: Translation;
+  onOpenSettings(): void;
   onLogin(username: string, password: string): Promise<void>;
   onRegister(
     username: string,
@@ -633,29 +702,33 @@ function AuthScreen(props: AuthScreenProps) {
 
   return (
     <main className="onboarding-shell">
+      <button
+        className="onboarding-settings-button"
+        type="button"
+        onClick={props.onOpenSettings}
+      >
+        <SettingsIcon />
+        <span>{props.t.settings}</span>
+      </button>
       <section className="onboarding-card auth-card">
-        <p className="eyebrow">Secure Chat · Local Development</p>
-        <h1>{mode === "register" ? "Create your account" : "Welcome back"}</h1>
-        <p className="onboarding-intro">
-          Register a username and password, then sign in as that account. This
-          replaces the old local-profile picker. Passwords are stored as
-          Argon2id hashes; messages are not yet end-to-end encrypted.
-        </p>
+        <p className="eyebrow">{props.t.appName} · {props.t.localDevelopment}</p>
+        <h1>{mode === "register" ? props.t.createAccountTitle : props.t.welcomeBack}</h1>
+<p className="onboarding-intro">{props.t.authIntro}</p>
 
-        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+        <div className="auth-tabs" role="tablist" aria-label={props.t.login}>
           <button
             className={mode === "register" ? "active" : ""}
             type="button"
             onClick={() => switchMode("register")}
           >
-            Register
+            {props.t.register}
           </button>
           <button
             className={mode === "login" ? "active" : ""}
             type="button"
             onClick={() => switchMode("login")}
           >
-            Log in
+            {props.t.login}
           </button>
         </div>
 
@@ -665,7 +738,7 @@ function AuthScreen(props: AuthScreenProps) {
             event.preventDefault();
             setLocalError(null);
             if (mode === "register" && password !== confirmPassword) {
-              setLocalError("Passwords do not match.");
+              setLocalError(props.t.passwordsMismatch);
               return;
             }
             if (mode === "register") {
@@ -676,7 +749,7 @@ function AuthScreen(props: AuthScreenProps) {
           }}
         >
           <label>
-            Username
+            {props.t.username}
             <input
               value={username}
               onChange={(event) => setUsername(event.target.value)}
@@ -688,12 +761,12 @@ function AuthScreen(props: AuthScreenProps) {
               autoFocus
               required
             />
-            <small>3–32 letters, numbers, or underscore.</small>
+            <small>{props.t.usernameHint}</small>
           </label>
 
           {mode === "register" && (
             <label>
-              Display name
+              {props.t.displayName}
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
@@ -706,7 +779,7 @@ function AuthScreen(props: AuthScreenProps) {
           )}
 
           <label>
-            Password
+            {props.t.password}
             <input
               type="password"
               value={password}
@@ -718,12 +791,12 @@ function AuthScreen(props: AuthScreenProps) {
               }
               required
             />
-            {mode === "register" && <small>At least 8 characters.</small>}
+            {mode === "register" && <small>{props.t.passwordHint}</small>}
           </label>
 
           {mode === "register" && (
             <label>
-              Confirm password
+              {props.t.confirmPassword}
               <input
                 type="password"
                 value={confirmPassword}
@@ -738,10 +811,10 @@ function AuthScreen(props: AuthScreenProps) {
 
           <button className="primary-button auth-submit" type="submit" disabled={props.busy}>
             {props.busy
-              ? "Please wait…"
+              ? props.t.pleaseWait
               : mode === "register"
-                ? "Create account"
-                : "Log in"}
+                ? props.t.createAccount
+                : props.t.login}
           </button>
         </form>
 
@@ -753,12 +826,20 @@ function AuthScreen(props: AuthScreenProps) {
   );
 }
 
-function LoadingScreen() {
+function LoadingScreen({ t, onOpenSettings }: { t: Translation; onOpenSettings(): void }) {
   return (
     <main className="onboarding-shell">
+      <button
+        className="onboarding-settings-button"
+        type="button"
+        onClick={onOpenSettings}
+      >
+        <SettingsIcon />
+        <span>{t.settings}</span>
+      </button>
       <section className="onboarding-card loading-card">
-        <p className="eyebrow">Secure Chat</p>
-        <h1>Restoring your session…</h1>
+        <p className="eyebrow">{t.appName}</p>
+        <h1>{t.restoringSession}</h1>
       </section>
     </main>
   );
@@ -844,17 +925,17 @@ function initials(value: string): string {
   );
 }
 
-function socketStatusLabel(status: SocketStatus): string {
+function socketStatusLabel(status: SocketStatus, t: Translation): string {
   if (status === "online") {
-    return "Realtime connected";
+    return t.realtimeConnected;
   }
   if (status === "connecting") {
-    return "Realtime connecting";
+    return t.realtimeConnecting;
   }
-  return "Realtime offline";
+  return t.realtimeOffline;
 }
 
-function relativeTime(value: string | null): string {
+function relativeTime(value: string | null, locale: Locale): string {
   if (!value) {
     return "";
   }
@@ -863,10 +944,16 @@ function relativeTime(value: string | null): string {
     return "";
   }
   const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return "now";
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
-  return new Date(value).toLocaleDateString(undefined, {
+  if (seconds < 60) return locale === "zh-CN" ? "刚刚" : "now";
+  if (seconds < 3600) {
+    const minutes = Math.floor(seconds / 60);
+    return locale === "zh-CN" ? `${minutes}分钟` : `${minutes}m`;
+  }
+  if (seconds < 86_400) {
+    const hours = Math.floor(seconds / 3600);
+    return locale === "zh-CN" ? `${hours}小时` : `${hours}h`;
+  }
+  return new Date(value).toLocaleDateString(locale, {
     month: "short",
     day: "numeric",
   });
@@ -877,7 +964,7 @@ function formatClock(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return "";
   }
-  return date.toLocaleTimeString(undefined, {
+  return date.toLocaleTimeString(document.documentElement.lang || undefined, {
     hour: "2-digit",
     minute: "2-digit",
   });
