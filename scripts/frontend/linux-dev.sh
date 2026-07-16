@@ -2,27 +2,38 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-SAVED_STTY=""
 
-# fish itself manages the kitty keyboard-protocol stack. Sending CSI < u from
-# this wrapper desynchronizes fish and the terminal, which makes Ctrl-C appear
-# as literal "^[[99;5u" text after the Tauri window closes. Preserve only the
-# POSIX tty flags here and leave keyboard-protocol negotiation to the shell.
-if [[ -r /dev/tty && -w /dev/tty ]]; then
-    SAVED_STTY="$(stty -g < /dev/tty 2>/dev/null || true)"
-fi
+# Keep the Tauri/Vite/Cargo processes away from the shell's input stream and
+# make their output a pipe rather than a terminal. This prevents terminal
+# capability probes from leaving OSC/CSI replies in fish's pending input after
+# the application window closes.
+run_tauri_dev() {
+    cd "$ROOT"
+    pnpm --dir frontends/linux tauri:dev </dev/null 2>&1 | cat
+}
 
-restore_terminal() {
-    if [[ -n "$SAVED_STTY" && -r /dev/tty && -w /dev/tty ]]; then
-        stty "$SAVED_STTY" < /dev/tty > /dev/tty 2>/dev/null || true
+# Some terminals can deliver capability replies a few milliseconds after the
+# child process exits. Discard only already-pending input before returning to
+# fish; do not change the kitty keyboard-protocol stack or saved stty flags.
+flush_pending_terminal_replies() {
+    [[ -r /dev/tty && -w /dev/tty ]] || return 0
+
+    sleep 0.12
+    if command -v python3 >/dev/null 2>&1; then
+        python3 - <<'PY' >/dev/null 2>&1 || true
+import os
+import termios
+
+fd = os.open("/dev/tty", os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+try:
+    termios.tcflush(fd, termios.TCIFLUSH)
+finally:
+    os.close(fd)
+PY
     fi
 }
 
-trap restore_terminal EXIT HUP INT TERM
-
-cd "$ROOT"
-# The development process does not require interactive stdin. Keeping stdin
-# away from WebKit/Tauri/cargo prevents a child from consuming or changing the
-# shell's terminal input protocol, while Ctrl-C still reaches the foreground
-# process group as SIGINT.
-pnpm --dir frontends/linux tauri:dev </dev/null
+status=0
+run_tauri_dev || status=$?
+flush_pending_terminal_replies
+exit "$status"

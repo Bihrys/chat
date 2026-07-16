@@ -307,21 +307,64 @@ impl MailboxRepository {
         before_seq: Option<i64>,
         limit: i64,
     ) -> Result<Vec<MessageRecord>> {
-        let table = if self.is_group_conversation(conversation_id).await? {
-            "group_messages"
-        } else {
-            "messages"
-        };
-        let sql = format!(
-            "SELECT * FROM (SELECT message_seq, message_id, conversation_id, sender_account_id, client_message_id, payload_format, body, created_at FROM {table} WHERE conversation_id = $1 AND ($2::BIGINT IS NULL OR message_seq < $2) ORDER BY message_seq DESC LIMIT $3) recent ORDER BY message_seq ASC"
-        );
-        let rows = sqlx::query(&sql)
+        let is_group = self.is_group_conversation(conversation_id).await?;
+        let rows = if is_group {
+            sqlx::query(
+                r"
+                SELECT *
+                FROM (
+                    SELECT message_seq,
+                           message_id,
+                           conversation_id,
+                           sender_account_id,
+                           client_message_id,
+                           payload_format,
+                           body,
+                           created_at
+                    FROM group_messages
+                    WHERE conversation_id = $1
+                      AND ($2::BIGINT IS NULL OR message_seq < $2)
+                    ORDER BY message_seq DESC
+                    LIMIT $3
+                ) recent
+                ORDER BY message_seq ASC
+                ",
+            )
             .bind(conversation_id)
             .bind(before_seq)
             .bind(limit)
             .fetch_all(&self.pool)
             .await
-            .context("failed to list messages")?;
+        } else {
+            sqlx::query(
+                r"
+                SELECT *
+                FROM (
+                    SELECT message_seq,
+                           message_id,
+                           conversation_id,
+                           sender_account_id,
+                           client_message_id,
+                           payload_format,
+                           body,
+                           created_at
+                    FROM messages
+                    WHERE conversation_id = $1
+                      AND ($2::BIGINT IS NULL OR message_seq < $2)
+                    ORDER BY message_seq DESC
+                    LIMIT $3
+                ) recent
+                ORDER BY message_seq ASC
+                ",
+            )
+            .bind(conversation_id)
+            .bind(before_seq)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+        }
+        .context("failed to list messages")?;
+
         rows.into_iter().map(row_to_message).collect()
     }
 
@@ -333,26 +376,37 @@ impl MailboxRepository {
         body: &str,
     ) -> Result<MessageRecord> {
         let is_group = self.is_group_conversation(conversation_id).await?;
-        let table = if is_group {
-            "group_messages"
-        } else {
-            "messages"
-        };
-        let conversation_table = if is_group {
-            "group_conversations"
-        } else {
-            "direct_conversations"
-        };
         let message_id = Uuid::now_v7();
         let mut transaction = self
             .pool
             .begin()
             .await
             .context("failed to begin message transaction")?;
-        let sql = format!(
-            "INSERT INTO {table} (message_id, conversation_id, sender_account_id, client_message_id, payload_format, body) VALUES ($1, $2, $3, $4, 0, $5) ON CONFLICT (conversation_id, sender_account_id, client_message_id) DO UPDATE SET client_message_id = EXCLUDED.client_message_id RETURNING message_seq, message_id, conversation_id, sender_account_id, client_message_id, payload_format, body, created_at"
-        );
-        let row = sqlx::query(&sql)
+
+        let row = if is_group {
+            sqlx::query(
+                r"
+                INSERT INTO group_messages (
+                    message_id,
+                    conversation_id,
+                    sender_account_id,
+                    client_message_id,
+                    payload_format,
+                    body
+                )
+                VALUES ($1, $2, $3, $4, 0, $5)
+                ON CONFLICT (conversation_id, sender_account_id, client_message_id)
+                DO UPDATE SET client_message_id = EXCLUDED.client_message_id
+                RETURNING message_seq,
+                          message_id,
+                          conversation_id,
+                          sender_account_id,
+                          client_message_id,
+                          payload_format,
+                          body,
+                          created_at
+                ",
+            )
             .bind(message_id)
             .bind(conversation_id)
             .bind(sender_account_id)
@@ -360,17 +414,69 @@ impl MailboxRepository {
             .bind(body)
             .fetch_one(&mut *transaction)
             .await
-            .context("failed to insert message")?;
+        } else {
+            sqlx::query(
+                r"
+                INSERT INTO messages (
+                    message_id,
+                    conversation_id,
+                    sender_account_id,
+                    client_message_id,
+                    payload_format,
+                    body
+                )
+                VALUES ($1, $2, $3, $4, 0, $5)
+                ON CONFLICT (conversation_id, sender_account_id, client_message_id)
+                DO UPDATE SET client_message_id = EXCLUDED.client_message_id
+                RETURNING message_seq,
+                          message_id,
+                          conversation_id,
+                          sender_account_id,
+                          client_message_id,
+                          payload_format,
+                          body,
+                          created_at
+                ",
+            )
+            .bind(message_id)
+            .bind(conversation_id)
+            .bind(sender_account_id)
+            .bind(client_message_id)
+            .bind(body)
+            .fetch_one(&mut *transaction)
+            .await
+        }
+        .context("failed to insert message")?;
+
         let message = row_to_message(row)?;
-        let update_sql = format!(
-            "UPDATE {conversation_table} SET last_message_at = GREATEST(COALESCE(last_message_at, $2), $2) WHERE conversation_id = $1"
-        );
-        sqlx::query(&update_sql)
+        if is_group {
+            sqlx::query(
+                r"
+                UPDATE group_conversations
+                SET last_message_at = GREATEST(COALESCE(last_message_at, $2), $2)
+                WHERE conversation_id = $1
+                ",
+            )
             .bind(conversation_id)
             .bind(message.created_at)
             .execute(&mut *transaction)
             .await
-            .context("failed to update conversation activity")?;
+            .context("failed to update group conversation activity")?;
+        } else {
+            sqlx::query(
+                r"
+                UPDATE direct_conversations
+                SET last_message_at = GREATEST(COALESCE(last_message_at, $2), $2)
+                WHERE conversation_id = $1
+                ",
+            )
+            .bind(conversation_id)
+            .bind(message.created_at)
+            .execute(&mut *transaction)
+            .await
+            .context("failed to update direct conversation activity")?;
+        }
+
         transaction
             .commit()
             .await
@@ -380,34 +486,80 @@ impl MailboxRepository {
 
     pub(crate) async fn mark_read(&self, conversation_id: Uuid, actor: Uuid) -> Result<i64> {
         let is_group = self.is_group_conversation(conversation_id).await?;
-        let message_table = if is_group {
-            "group_messages"
-        } else {
-            "messages"
-        };
-        let read_table = if is_group {
-            "group_reads"
-        } else {
-            "conversation_reads"
-        };
-        let max_sql = format!(
-            "SELECT COALESCE(MAX(message_seq), 0)::BIGINT FROM {message_table} WHERE conversation_id = $1"
-        );
-        let max_seq: i64 = sqlx::query_scalar(&max_sql)
+        let max_seq: i64 = if is_group {
+            sqlx::query_scalar(
+                r"
+                SELECT COALESCE(MAX(message_seq), 0)::BIGINT
+                FROM group_messages
+                WHERE conversation_id = $1
+                ",
+            )
             .bind(conversation_id)
             .fetch_one(&self.pool)
             .await
-            .context("failed to calculate read position")?;
-        let read_sql = format!(
-            "INSERT INTO {read_table} (conversation_id, account_id, last_read_seq, updated_at) VALUES ($1, $2, $3, now()) ON CONFLICT (conversation_id, account_id) DO UPDATE SET last_read_seq = GREATEST({read_table}.last_read_seq, EXCLUDED.last_read_seq), updated_at = now()"
-        );
-        sqlx::query(&read_sql)
+        } else {
+            sqlx::query_scalar(
+                r"
+                SELECT COALESCE(MAX(message_seq), 0)::BIGINT
+                FROM messages
+                WHERE conversation_id = $1
+                ",
+            )
+            .bind(conversation_id)
+            .fetch_one(&self.pool)
+            .await
+        }
+        .context("failed to calculate read position")?;
+
+        if is_group {
+            sqlx::query(
+                r"
+                INSERT INTO group_reads (
+                    conversation_id,
+                    account_id,
+                    last_read_seq,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, now())
+                ON CONFLICT (conversation_id, account_id)
+                DO UPDATE SET
+                    last_read_seq = GREATEST(group_reads.last_read_seq, EXCLUDED.last_read_seq),
+                    updated_at = now()
+                ",
+            )
             .bind(conversation_id)
             .bind(actor)
             .bind(max_seq)
             .execute(&self.pool)
             .await
-            .context("failed to update read position")?;
+            .context("failed to update group read position")?;
+        } else {
+            sqlx::query(
+                r"
+                INSERT INTO conversation_reads (
+                    conversation_id,
+                    account_id,
+                    last_read_seq,
+                    updated_at
+                )
+                VALUES ($1, $2, $3, now())
+                ON CONFLICT (conversation_id, account_id)
+                DO UPDATE SET
+                    last_read_seq = GREATEST(
+                        conversation_reads.last_read_seq,
+                        EXCLUDED.last_read_seq
+                    ),
+                    updated_at = now()
+                ",
+            )
+            .bind(conversation_id)
+            .bind(actor)
+            .bind(max_seq)
+            .execute(&self.pool)
+            .await
+            .context("failed to update direct read position")?;
+        }
+
         Ok(max_seq)
     }
 
