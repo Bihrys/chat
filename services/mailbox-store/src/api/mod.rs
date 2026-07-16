@@ -27,8 +27,8 @@ use crate::{
         validate_group_name, validate_initial_group_members, validate_message_body,
     },
     domain::{
-        CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord, GroupMemberRecord,
-        GroupRecord, GroupRole, MessageRecord, MessageWire, ServerEvent,
+        CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
+        GroupMemberRecord, GroupRecord, GroupRole, MessageRecord, MessageWire, ServerEvent,
     },
     infrastructure::{ContactVerifier, MailboxRepository},
 };

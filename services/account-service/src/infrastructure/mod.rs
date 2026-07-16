@@ -10,8 +10,9 @@ const ACCOUNT_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0001_basic_accounts.sql");
 const SOCIAL_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0002_social_graph.sql");
-const PROFILE_CONTACT_MIGRATION: &str =
-    include_str!("../../../../infra/native/postgresql/migrations/identity/0003_profile_contacts.sql");
+const PROFILE_CONTACT_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/identity/0003_profile_contacts.sql"
+);
 
 #[derive(Clone)]
 pub(crate) struct AccountRepository {

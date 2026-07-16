@@ -6,8 +6,9 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::domain::{
-    CommonGroupRecord, ConversationKind, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
-    GroupJoinRequestStatus, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord,
+    CommonGroupRecord, ConversationKind, ConversationRecord, GroupDiscoveryRecord,
+    GroupJoinRequestRecord, GroupJoinRequestStatus, GroupMemberRecord, GroupRecord, GroupRole,
+    MessageRecord,
 };
 
 const DIRECT_MIGRATION: &str =

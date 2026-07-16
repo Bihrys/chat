@@ -242,7 +242,11 @@ async fn update_contact(
     Json(request): Json<UpdateContactRequest>,
 ) -> Result<Json<AccountResponse>, ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
-    let remark = request.remark_name.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let remark = request
+        .remark_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if remark.is_some_and(|value| value.chars().count() > 64) {
         return Err(ApiError::bad_request(
             "invalid_remark_name",
