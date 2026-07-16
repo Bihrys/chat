@@ -106,7 +106,8 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"]
 # HTTP server
 # -----------------------------------------------------------------------------
 http = "1"
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
+futures-util = "0.3"
 
 # -----------------------------------------------------------------------------
 # PostgreSQL

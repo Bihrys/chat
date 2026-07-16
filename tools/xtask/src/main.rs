@@ -35,6 +35,7 @@ fn help() {
          check\n  \
          bootstrap\n  \
          infra up|down|status\n  \
+         chat up|down|status|smoke\n  \
          services build|start|stop|status|restart [name|all]\n  \
          linux dev|build|typecheck\n"
     );
@@ -53,6 +54,16 @@ fn main() -> ExitCode {
         }
         [cmd, action] if cmd == "infra" && action == "status" => {
             run("bash", &["scripts/infrastructure/status-all.sh"])
+        }
+        [cmd, action] if cmd == "chat" && action == "up" => run("bash", &["scripts/chat/start.sh"]),
+        [cmd, action] if cmd == "chat" && action == "down" => {
+            run("bash", &["scripts/chat/stop.sh"])
+        }
+        [cmd, action] if cmd == "chat" && action == "status" => {
+            run("bash", &["scripts/chat/status.sh"])
+        }
+        [cmd, action] if cmd == "chat" && action == "smoke" => {
+            run("bash", &["scripts/chat/smoke-test.sh"])
         }
         [cmd, action] if cmd == "services" && action == "build" => {
             run("bash", &["scripts/services/build.sh"])
@@ -82,7 +93,7 @@ fn main() -> ExitCode {
             run("bash", &["scripts/services/restart.sh", name.as_str()])
         }
         [cmd, action] if cmd == "linux" && action == "dev" => {
-            run("pnpm", &["--dir", "frontends/linux", "tauri:dev"])
+            run("bash", &["scripts/frontend/linux-dev.sh"])
         }
         [cmd, action] if cmd == "linux" && action == "build" => {
             run("pnpm", &["--dir", "frontends/linux", "tauri:build"])

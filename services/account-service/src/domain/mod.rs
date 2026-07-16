@@ -1,1 +1,19 @@
-//! Domain layer.
+//! Account domain types for the first local chat vertical slice.
+
+use time::OffsetDateTime;
+use uuid::Uuid;
+
+#[derive(Clone, Debug)]
+pub(crate) struct Account {
+    pub(crate) account_id: Uuid,
+    pub(crate) username: String,
+    pub(crate) display_name: String,
+    pub(crate) created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct NewAccount {
+    pub(crate) username: String,
+    pub(crate) username_normalized: String,
+    pub(crate) display_name: String,
+}

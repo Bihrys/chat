@@ -7,10 +7,17 @@ publish.workspace = true
 
 [dependencies]
 chat-server-core.workspace = true
-chat-storage-server.workspace = true
-chat-protocol-envelope.workspace = true
+chat-foundation-config.workspace = true
 anyhow.workspace = true
+axum.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+time.workspace = true
 tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
 
 [lints]
 workspace = true

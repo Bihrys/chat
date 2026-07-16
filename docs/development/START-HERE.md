@@ -16,10 +16,25 @@ This initializes or reuses the project-local PostgreSQL cluster, creates isolate
 
 ## Daily development
 
+For the current Basic Chat V0 vertical slice:
+
 ```bash
 cargo xtask infra up
-cargo xtask check
+cargo xtask chat up
+cargo xtask chat status
+cargo xtask chat smoke
 cargo xtask linux dev
+```
+
+`chat up` starts the first two domain services with real behavior:
+`account-service` and `mailbox-store`. See
+[`BASIC-CHAT-V0.md`](./BASIC-CHAT-V0.md) for the local two-client test flow and
+the explicit pre-E2EE security boundary.
+
+Run the whole-workspace quality gate separately:
+
+```bash
+cargo xtask check
 ```
 
 ## Run service skeletons

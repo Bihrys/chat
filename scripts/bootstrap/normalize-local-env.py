@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 from pathlib import Path
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, unquote, urlsplit
 import os
 
 root = Path(__file__).resolve().parents[2]
@@ -38,25 +38,38 @@ add("POSTGRES_HOST", "127.0.0.1")
 add("POSTGRES_PORT", "55432")
 add("POSTGRES_ADMIN_USER", "chat_admin")
 
-pairs = {
-    "IDENTITY_DB_PASSWORD": "IDENTITY_DATABASE_URL",
-    "AUTH_DB_PASSWORD": "AUTH_DATABASE_URL",
-    "KEY_DIRECTORY_DB_PASSWORD": "KEY_DIRECTORY_DATABASE_URL",
-    "KEY_TRANSPARENCY_DB_PASSWORD": "KEY_TRANSPARENCY_DATABASE_URL",
-    "MAILBOX_DB_PASSWORD": "MAILBOX_DATABASE_URL",
-    "OBJECT_DB_PASSWORD": "OBJECT_DATABASE_URL",
-    "GROUP_DB_PASSWORD": "GROUP_DATABASE_URL",
-    "BACKUP_DB_PASSWORD": "BACKUP_DATABASE_URL",
-    "CONFIG_DB_PASSWORD": "CONFIG_DATABASE_URL",
-    "DIAGNOSTIC_DB_PASSWORD": "DIAGNOSTIC_DATABASE_URL",
+database_settings = {
+    "IDENTITY": ("chat_identity", "chat_identity"),
+    "AUTH": ("chat_auth", "chat_auth"),
+    "KEY_DIRECTORY": ("chat_key_directory", "chat_key_directory"),
+    "KEY_TRANSPARENCY": ("chat_key_transparency", "chat_key_transparency"),
+    "MAILBOX": ("chat_mailbox", "chat_mailbox"),
+    "OBJECT": ("chat_object", "chat_object"),
+    "GROUP": ("chat_group", "chat_group"),
+    "BACKUP": ("chat_backup", "chat_backup"),
+    "CONFIG": ("chat_config", "chat_config"),
+    "DIAGNOSTIC": ("chat_diagnostic", "chat_diagnostic"),
 }
-for password_key, url_key in pairs.items():
-    url = values.get(url_key)
-    password = urlsplit(url).password if url else None
-    default_name = password_key.lower().replace("_db_password", "").replace("_", "-")
+
+for prefix, (role, database) in database_settings.items():
+    password_key = f"{prefix}_DB_PASSWORD"
+    url_key = f"{prefix}_DATABASE_URL"
+    existing_url = values.get(url_key)
+    existing_password = urlsplit(existing_url).password if existing_url else None
+    default_name = prefix.lower().replace("_", "-")
     add(
         password_key,
-        unquote(password) if password else f"local-dev-{default_name}-change-me",
+        unquote(existing_password)
+        if existing_password
+        else f"local-dev-{default_name}-change-me",
+    )
+
+    password = quote(current(password_key, f"local-dev-{default_name}-change-me"), safe="")
+    host = current("POSTGRES_HOST", "127.0.0.1")
+    port = current("POSTGRES_PORT", "55432")
+    add(
+        url_key,
+        f"postgresql://{role}:{password}@{host}:{port}/{database}",
     )
 
 add("VALKEY_HOST", "127.0.0.1")
