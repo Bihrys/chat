@@ -91,10 +91,10 @@ impl AuthRepository {
         password_hash: &str,
     ) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             INSERT INTO account_credentials (account_id, password_hash)
             VALUES ($1, $2)
-            "#,
+            ",
         )
         .bind(account_id)
         .bind(password_hash)
@@ -139,7 +139,7 @@ impl AuthRepository {
     ) -> Result<Uuid> {
         let session_id = Uuid::now_v7();
         sqlx::query(
-            r#"
+            r"
             INSERT INTO auth_sessions (
                 session_id,
                 account_id,
@@ -147,7 +147,7 @@ impl AuthRepository {
                 expires_at
             )
             VALUES ($1, $2, $3, $4)
-            "#,
+            ",
         )
         .bind(session_id)
         .bind(account_id)
@@ -165,13 +165,13 @@ impl AuthRepository {
     ) -> Result<Option<AuthenticatedSession>> {
         let token_hash = hash_access_token(token);
         let row = sqlx::query(
-            r#"
+            r"
             SELECT session_id, account_id, expires_at
             FROM auth_sessions
             WHERE token_hash = $1
               AND revoked_at IS NULL
               AND expires_at > now()
-            "#,
+            ",
         )
         .bind(token_hash)
         .fetch_optional(&self.auth_pool)
@@ -191,11 +191,11 @@ impl AuthRepository {
 
     pub(crate) async fn revoke_session(&self, session_id: Uuid) -> Result<()> {
         sqlx::query(
-            r#"
+            r"
             UPDATE auth_sessions
             SET revoked_at = COALESCE(revoked_at, now())
             WHERE session_id = $1
-            "#,
+            ",
         )
         .bind(session_id)
         .execute(&self.auth_pool)
