@@ -1,10 +1,10 @@
-//! PostgreSQL persistence for the local account directory.
+//! PostgreSQL persistence for the account-service-owned identity directory.
 
 use anyhow::{Context, Result};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::domain::{Account, NewAccount};
+use crate::domain::Account;
 
 const MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0001_basic_accounts.sql");
@@ -28,7 +28,7 @@ impl AccountRepository {
         sqlx::raw_sql(MIGRATION)
             .execute(&pool)
             .await
-            .context("failed to apply identity development migration")?;
+            .context("failed to apply identity migration")?;
 
         Ok(Self { pool })
     }
@@ -41,26 +41,18 @@ impl AccountRepository {
         Ok(())
     }
 
-    pub(crate) async fn username_exists(&self, username_normalized: &str) -> Result<bool> {
-        let exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM account_profiles WHERE username_normalized = $1)",
-        )
-        .bind(username_normalized)
-        .fetch_one(&self.pool)
-        .await
-        .context("failed to check username availability")?;
-
-        Ok(exists)
-    }
-
-    pub(crate) async fn create(&self, new_account: &NewAccount) -> Result<Account> {
-        let account_id = Uuid::now_v7();
+    pub(crate) async fn create(
+        &self,
+        account_id: Uuid,
+        username: &str,
+        username_normalized: &str,
+        display_name: &str,
+    ) -> Result<Account> {
         let mut transaction = self
             .pool
             .begin()
             .await
             .context("failed to begin account transaction")?;
-
         let row = sqlx::query(
             r#"
             INSERT INTO accounts (account_id, status)
@@ -72,7 +64,6 @@ impl AccountRepository {
         .fetch_one(&mut *transaction)
         .await
         .context("failed to create account")?;
-
         let created_at = row
             .try_get("created_at")
             .context("missing account created_at")?;
@@ -89,9 +80,9 @@ impl AccountRepository {
             "#,
         )
         .bind(account_id)
-        .bind(&new_account.username)
-        .bind(&new_account.username_normalized)
-        .bind(&new_account.display_name)
+        .bind(username)
+        .bind(username_normalized)
+        .bind(display_name)
         .execute(&mut *transaction)
         .await
         .context("failed to create account profile")?;
@@ -103,8 +94,8 @@ impl AccountRepository {
 
         Ok(Account {
             account_id,
-            username: new_account.username.clone(),
-            display_name: new_account.display_name.clone(),
+            username: username.to_owned(),
+            display_name: display_name.to_owned(),
             created_at,
         })
     }
@@ -130,6 +121,68 @@ impl AccountRepository {
         .context("failed to fetch account")?;
 
         row.map(row_to_account).transpose()
+    }
+
+    pub(crate) async fn get_by_username(
+        &self,
+        username_normalized: &str,
+    ) -> Result<Option<Account>> {
+        let row = sqlx::query(
+            r#"
+            SELECT
+                a.account_id,
+                p.username,
+                p.display_name,
+                a.created_at
+            FROM accounts a
+            JOIN account_profiles p ON p.account_id = a.account_id
+            WHERE p.username_normalized = $1
+              AND a.deleted_at IS NULL
+              AND a.status = 1
+            "#,
+        )
+        .bind(username_normalized)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to fetch account by username")?;
+
+        row.map(row_to_account).transpose()
+    }
+
+    pub(crate) async fn update_display_name(
+        &self,
+        account_id: Uuid,
+        display_name: &str,
+    ) -> Result<Option<Account>> {
+        let updated = sqlx::query(
+            r#"
+            UPDATE account_profiles p
+            SET display_name = $2, updated_at = now()
+            FROM accounts a
+            WHERE p.account_id = $1
+              AND a.account_id = p.account_id
+              AND a.deleted_at IS NULL
+              AND a.status = 1
+            "#,
+        )
+        .bind(account_id)
+        .bind(display_name)
+        .execute(&self.pool)
+        .await
+        .context("failed to update display name")?;
+        if updated.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get(account_id).await
+    }
+
+    pub(crate) async fn delete(&self, account_id: Uuid) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
+            .bind(account_id)
+            .execute(&self.pool)
+            .await
+            .context("failed to delete account")?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub(crate) async fn list(&self, query: Option<&str>, limit: i64) -> Result<Vec<Account>> {

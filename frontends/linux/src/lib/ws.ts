@@ -7,7 +7,7 @@ export interface ChatSocketCallbacks {
 }
 
 export function connectChatSocket(
-  accountId: string,
+  accessToken: string,
   callbacks: ChatSocketCallbacks,
 ): () => void {
   let stopped = false;
@@ -22,7 +22,7 @@ export function connectChatSocket(
 
     callbacks.onStatus("connecting");
     const url = new URL("/v1/ws", MAILBOX_WS_URL);
-    url.searchParams.set("account_id", accountId);
+    url.searchParams.set("access_token", accessToken);
     socket = new WebSocket(url);
 
     socket.onopen = () => {

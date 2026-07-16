@@ -47,6 +47,7 @@ check() {
 }
 
 failed=0
+check "auth-service" "chat-service-auth-service" "$AUTH_SERVICE_ADDR" || failed=1
 check "account-service" "chat-service-account-service" "$ACCOUNT_SERVICE_ADDR" || failed=1
 check "mailbox-store" "chat-service-mailbox-store" "$MAILBOX_STORE_ADDR" || failed=1
 exit "$failed"

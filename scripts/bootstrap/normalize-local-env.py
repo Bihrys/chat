@@ -2,6 +2,7 @@
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 import os
+import secrets
 
 root = Path(__file__).resolve().parents[2]
 env_path = root / ".env"
@@ -33,6 +34,7 @@ def current(key: str, fallback: str) -> str:
 
 add("CHAT_ENV", "local")
 add("CHAT_LOG_LEVEL", "debug")
+add("CHAT_INTERNAL_SERVICE_TOKEN", secrets.token_urlsafe(32))
 
 add("POSTGRES_HOST", "127.0.0.1")
 add("POSTGRES_PORT", "55432")

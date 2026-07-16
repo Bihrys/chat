@@ -4,7 +4,7 @@ set -Eeuo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 PID_DIR="$ROOT/var/run/pids/services"
 
-for name in mailbox-store account-service; do
+for name in mailbox-store account-service auth-service; do
     pid_file="$PID_DIR/$name.pid"
     if [[ ! -f "$pid_file" ]]; then
         echo "$name is not running."

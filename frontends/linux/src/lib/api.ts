@@ -1,8 +1,14 @@
 import {
   ACCOUNT_SERVICE_URL,
+  AUTH_SERVICE_URL,
   MAILBOX_SERVICE_URL,
 } from "./config";
-import type { Account, ChatMessage, Conversation } from "./types";
+import type {
+  Account,
+  AuthSession,
+  ChatMessage,
+  Conversation,
+} from "./types";
 
 export class ApiError extends Error {
   readonly code: string;
@@ -36,6 +42,7 @@ async function requestJson<T>(
       `Cannot reach the local chat service at ${origin}. Run cargo xtask chat up and cargo xtask chat status.`,
     );
   }
+
   if (!response.ok) {
     let payload: ErrorPayload = {};
     try {
@@ -50,76 +57,109 @@ async function requestJson<T>(
     );
   }
 
+  if (response.status === 204) {
+    return undefined as T;
+  }
   return (await response.json()) as T;
 }
 
-function actorHeaders(accountId: string): HeadersInit {
+function bearerHeaders(accessToken: string, jsonBody = false): HeadersInit {
   return {
-    "Content-Type": "application/json",
-    "X-Chat-Account-Id": accountId,
+    ...(jsonBody ? { "Content-Type": "application/json" } : {}),
+    Authorization: `Bearer ${accessToken}`,
   };
 }
 
-export async function listAccounts(query = ""): Promise<Account[]> {
+export async function registerAccount(input: {
+  username: string;
+  displayName: string;
+  password: string;
+}): Promise<AuthSession> {
+  return requestJson<AuthSession>(`${AUTH_SERVICE_URL}/v1/auth/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      username: input.username,
+      display_name: input.displayName,
+      password: input.password,
+    }),
+  });
+}
+
+export async function loginAccount(input: {
+  username: string;
+  password: string;
+}): Promise<AuthSession> {
+  return requestJson<AuthSession>(`${AUTH_SERVICE_URL}/v1/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function getCurrentAccount(accessToken: string): Promise<Account> {
+  return requestJson<Account>(`${AUTH_SERVICE_URL}/v1/auth/me`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function logoutAccount(accessToken: string): Promise<void> {
+  await requestJson<void>(`${AUTH_SERVICE_URL}/v1/auth/logout`, {
+    method: "POST",
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function listAccounts(
+  accessToken: string,
+  query = "",
+): Promise<Account[]> {
   const params = new URLSearchParams();
   if (query.trim()) {
     params.set("query", query.trim());
   }
   params.set("limit", "100");
   return requestJson<Account[]>(
-    `${ACCOUNT_SERVICE_URL}/v1/dev/accounts?${params.toString()}`,
+    `${ACCOUNT_SERVICE_URL}/v1/accounts?${params.toString()}`,
+    { headers: bearerHeaders(accessToken) },
   );
 }
 
-export async function createAccount(input: {
-  username: string;
-  displayName: string;
-}): Promise<Account> {
-  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/dev/accounts`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      username: input.username,
-      display_name: input.displayName,
-    }),
-  });
-}
-
 export async function listConversations(
-  accountId: string,
+  accessToken: string,
 ): Promise<Conversation[]> {
   return requestJson<Conversation[]>(`${MAILBOX_SERVICE_URL}/v1/conversations`, {
-    headers: actorHeaders(accountId),
+    headers: bearerHeaders(accessToken),
   });
 }
 
 export async function createDirectConversation(
-  accountId: string,
+  accessToken: string,
   peerAccountId: string,
 ): Promise<Conversation> {
   return requestJson<Conversation>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/direct`,
     {
       method: "POST",
-      headers: actorHeaders(accountId),
+      headers: bearerHeaders(accessToken, true),
       body: JSON.stringify({ peer_account_id: peerAccountId }),
     },
   );
 }
 
 export async function listMessages(
-  accountId: string,
+  accessToken: string,
   conversationId: string,
 ): Promise<ChatMessage[]> {
   const params = new URLSearchParams({ limit: "200" });
   return requestJson<ChatMessage[]>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages?${params.toString()}`,
-    { headers: actorHeaders(accountId) },
+    { headers: bearerHeaders(accessToken) },
   );
 }
 
 export async function sendMessage(
-  accountId: string,
+  accessToken: string,
   conversationId: string,
   body: string,
   clientMessageId: string,
@@ -128,7 +168,7 @@ export async function sendMessage(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages`,
     {
       method: "POST",
-      headers: actorHeaders(accountId),
+      headers: bearerHeaders(accessToken, true),
       body: JSON.stringify({
         client_message_id: clientMessageId,
         body,
@@ -138,14 +178,14 @@ export async function sendMessage(
 }
 
 export async function markConversationRead(
-  accountId: string,
+  accessToken: string,
   conversationId: string,
 ): Promise<void> {
   await requestJson<{ conversation_id: string; last_read_seq: number }>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/read`,
     {
       method: "POST",
-      headers: actorHeaders(accountId),
+      headers: bearerHeaders(accessToken, true),
       body: "{}",
     },
   );

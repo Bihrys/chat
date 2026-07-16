@@ -2,6 +2,7 @@
 set -Eeuo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+python3 "$ROOT/scripts/bootstrap/normalize-local-env.py" >/dev/null
 source "$ROOT/scripts/lib/common.sh"
 load_chat_env "$ROOT"
 
@@ -15,6 +16,7 @@ LOG_DIR="$ROOT/var/logs/services"
 mkdir -p "$PID_DIR" "$LOG_DIR"
 
 services=(
+    "auth-service|chat-service-auth-service|AUTH_SERVICE_ADDR"
     "account-service|chat-service-account-service|ACCOUNT_SERVICE_ADDR"
     "mailbox-store|chat-service-mailbox-store|MAILBOX_STORE_ADDR"
 )
@@ -25,6 +27,7 @@ services=(
 
 cd "$ROOT"
 cargo build \
+    -p chat-service-auth-service \
     -p chat-service-account-service \
     -p chat-service-mailbox-store
 
@@ -82,6 +85,7 @@ trap - ERR
 cat <<'MSG'
 Basic chat services started.
 
+Auth API: http://127.0.0.1:61001
 Account API: http://127.0.0.1:61002
 Mailbox API / WebSocket: http://127.0.0.1:62003
 MSG

@@ -7,8 +7,10 @@ mod infrastructure;
 async fn main() -> anyhow::Result<()> {
     chat_foundation_config::load_dotenv();
     let mailbox = infrastructure::MailboxRepository::connect().await?;
+    let sessions = chat_server_core::auth::SessionVerifier::connect_from_env()?;
     let app = api::router(api::AppState {
         mailbox,
+        sessions,
         events: api::EventHub::default(),
     });
 

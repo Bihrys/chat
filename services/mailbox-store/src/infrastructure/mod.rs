@@ -220,8 +220,11 @@ impl MailboxRepository {
         .await
         .context("failed to fetch conversation members")?;
 
-        row.map(|row| Ok((row.try_get("member_a")?, row.try_get("member_b")?)))
-            .transpose()
+        let Some(row) = row else {
+            return Ok(None);
+        };
+
+        Ok(Some((row.try_get("member_a")?, row.try_get("member_b")?)))
     }
 
     pub(crate) async fn list_messages(

@@ -5,6 +5,12 @@ export interface Account {
   created_at: string;
 }
 
+export interface AuthSession {
+  access_token: string;
+  expires_at: string;
+  account: Account;
+}
+
 export interface ChatMessage {
   message_seq: number;
   message_id: string;

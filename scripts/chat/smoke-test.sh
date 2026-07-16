@@ -10,6 +10,7 @@ if [[ "$CHAT_ENV" != "local" ]]; then
     exit 1
 fi
 
+export CHAT_AUTH_SERVICE_URL="http://$AUTH_SERVICE_ADDR"
 export CHAT_ACCOUNT_SERVICE_URL="http://$ACCOUNT_SERVICE_ADDR"
 export CHAT_MAILBOX_SERVICE_URL="http://$MAILBOX_STORE_ADDR"
 node "$ROOT/scripts/chat/smoke-test.mjs"

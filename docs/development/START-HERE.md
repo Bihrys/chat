@@ -26,8 +26,8 @@ cargo xtask chat smoke
 cargo xtask linux dev
 ```
 
-`chat up` starts the first two domain services with real behavior:
-`account-service` and `mailbox-store`. See
+`chat up` starts the first three domain services with real behavior:
+`auth-service`, `account-service`, and `mailbox-store`. See
 [`BASIC-CHAT-V0.md`](./BASIC-CHAT-V0.md) for the local two-client test flow and
 the explicit pre-E2EE security boundary.
 

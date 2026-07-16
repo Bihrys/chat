@@ -131,7 +131,7 @@ pub async fn local_dev_cors(request: Request<Body>, next: Next) -> Response {
     );
     headers.insert(
         header::ACCESS_CONTROL_ALLOW_HEADERS,
-        HeaderValue::from_static("content-type, x-chat-account-id"),
+        HeaderValue::from_static("content-type, authorization"),
     );
     headers.insert(
         header::ACCESS_CONTROL_MAX_AGE,

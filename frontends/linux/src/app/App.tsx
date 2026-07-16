@@ -1,17 +1,28 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import {
   ApiError,
-  createAccount,
   createDirectConversation,
+  getCurrentAccount,
   listAccounts,
   listConversations,
   listMessages,
+  loginAccount,
+  logoutAccount,
   markConversationRead,
+  registerAccount,
   sendMessage,
 } from "../lib/api";
 import type {
   Account,
+  AuthSession,
   ChatMessage,
   Conversation,
   ServerEvent,
@@ -19,32 +30,31 @@ import type {
 } from "../lib/types";
 import { connectChatSocket } from "../lib/ws";
 
-const SESSION_ACCOUNT_KEY = "chat.dev.active-account";
+const AUTH_SESSION_KEY = "chat.auth.session.v1";
+const MAX_COMPOSER_HEIGHT = 132;
 
 export function App() {
   const [backend, setBackend] = useState("checking");
+  const [session, setSession] = useState<AuthSession | null>(readStoredSession);
+  const [authChecking, setAuthChecking] = useState(session !== null);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [activeAccountId, setActiveAccountId] = useState<string | null>(
-    () => sessionStorage.getItem(SESSION_ACCOUNT_KEY),
-  );
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [selectedConversationId, setSelectedConversationId] = useState<
     string | null
   >(null);
   const selectedConversationRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const messageEndRef = useRef<HTMLDivElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("offline");
   const [directoryQuery, setDirectoryQuery] = useState("");
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showCreateAccount, setShowCreateAccount] = useState(false);
 
-  const activeAccount = useMemo(
-    () => accounts.find((account) => account.account_id === activeAccountId),
-    [accounts, activeAccountId],
-  );
+  const accessToken = session?.access_token ?? null;
+  const activeAccount = session?.account ?? null;
 
   const accountById = useMemo(
     () => new Map(accounts.map((account) => [account.account_id, account])),
@@ -63,20 +73,28 @@ export function App() {
     ? accountById.get(selectedConversation.peer_account_id)
     : undefined;
 
-  const refreshAccounts = useCallback(async () => {
-    const next = await listAccounts();
-    setAccounts(next);
-    if (
-      activeAccountId !== null &&
-      !next.some((account) => account.account_id === activeAccountId)
-    ) {
-      setActiveAccountId(null);
-      sessionStorage.removeItem(SESSION_ACCOUNT_KEY);
-    }
-  }, [activeAccountId]);
+  const saveSession = useCallback((next: AuthSession) => {
+    localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
+    setSession(next);
+  }, []);
 
-  const refreshConversations = useCallback(async (accountId: string) => {
-    const next = await listConversations(accountId);
+  const clearSession = useCallback(() => {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+    setSession(null);
+    setAccounts([]);
+    setConversations([]);
+    setMessages([]);
+    setSelectedConversationId(null);
+    setSocketStatus("offline");
+  }, []);
+
+  const refreshAccounts = useCallback(async (token: string) => {
+    const next = await listAccounts(token);
+    setAccounts(next);
+  }, []);
+
+  const refreshConversations = useCallback(async (token: string) => {
+    const next = await listConversations(token);
     setConversations(next);
   }, []);
 
@@ -91,90 +109,181 @@ export function App() {
     });
   }, []);
 
+  const reportError = useCallback(
+    (reason: unknown) => {
+      if (reason instanceof ApiError && reason.status === 401) {
+        clearSession();
+      }
+      setError(readableError(reason));
+    },
+    [clearSession],
+  );
+
   useEffect(() => {
     void invoke<string>("backend_status")
       .then(setBackend)
-      .catch(() => setBackend("unavailable"));
-
-    void refreshAccounts().catch((reason) => {
-      setError(readableError(reason));
-    });
-  }, [refreshAccounts]);
+      .catch(() => setBackend("web"));
+  }, []);
 
   useEffect(() => {
-    selectedConversationRef.current = selectedConversationId;
-  }, [selectedConversationId]);
-
-  useEffect(() => {
-    if (!activeAccountId) {
-      setConversations([]);
-      setMessages([]);
-      setSelectedConversationId(null);
-      setSocketStatus("offline");
-      return;
-    }
-
-    sessionStorage.setItem(SESSION_ACCOUNT_KEY, activeAccountId);
-    setSelectedConversationId(null);
-    setMessages([]);
-    setError(null);
-
-    void refreshConversations(activeAccountId).catch((reason) => {
-      setError(readableError(reason));
-    });
-
-    return connectChatSocket(activeAccountId, {
-      onStatus: setSocketStatus,
-      onEvent: (event) => {
-        void handleServerEvent(
-          event,
-          activeAccountId,
-          selectedConversationRef.current,
-          appendMessage,
-          setMessages,
-          refreshConversations,
-        ).catch((reason) => {
-          setError(readableError(reason));
-        });
-      },
-    });
-  }, [activeAccountId, appendMessage, refreshConversations]);
-
-
-  useEffect(() => {
-    messageEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
-  }, [messages]);
-
-  useEffect(() => {
-    if (!activeAccountId || !selectedConversationId) {
-      setMessages([]);
+    if (!accessToken || !session) {
+      setAuthChecking(false);
       return;
     }
 
     let cancelled = false;
-    void listMessages(activeAccountId, selectedConversationId)
-      .then((next) => {
+    setAuthChecking(true);
+    void getCurrentAccount(accessToken)
+      .then((account) => {
         if (!cancelled) {
-          setMessages(next);
+          saveSession({ ...session, account });
         }
       })
-      .then(() => markConversationRead(activeAccountId, selectedConversationId))
-      .then(() => refreshConversations(activeAccountId))
       .catch((reason) => {
         if (!cancelled) {
+          clearSession();
           setError(readableError(reason));
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setAuthChecking(false);
         }
       });
 
     return () => {
       cancelled = true;
     };
-  }, [activeAccountId, refreshConversations, selectedConversationId]);
+    // The access token is the stable session identity. Updating account display
+    // data must not trigger another verification request.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accessToken]);
+
+  useEffect(() => {
+    selectedConversationRef.current = selectedConversationId;
+  }, [selectedConversationId]);
+
+  useEffect(() => {
+    if (!accessToken || !activeAccount) {
+      return;
+    }
+
+    setSelectedConversationId(null);
+    setMessages([]);
+    setError(null);
+
+    void Promise.all([
+      refreshAccounts(accessToken),
+      refreshConversations(accessToken),
+    ]).catch(reportError);
+
+    return connectChatSocket(accessToken, {
+      onStatus: setSocketStatus,
+      onEvent: (event) => {
+        void handleServerEvent(
+          event,
+          accessToken,
+          activeAccount.account_id,
+          selectedConversationRef.current,
+          appendMessage,
+          setMessages,
+          refreshConversations,
+        ).catch(reportError);
+      },
+    });
+  }, [
+    accessToken,
+    activeAccount,
+    appendMessage,
+    refreshAccounts,
+    refreshConversations,
+    reportError,
+  ]);
+
+  useEffect(() => {
+    if (!accessToken || !directoryQuery.trim()) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void listAccounts(accessToken, directoryQuery)
+        .then((results) => {
+          if (cancelled) {
+            return;
+          }
+          setAccounts((current) => {
+            const merged = new Map(
+              current.map((account) => [account.account_id, account]),
+            );
+            for (const account of results) {
+              merged.set(account.account_id, account);
+            }
+            return [...merged.values()];
+          });
+        })
+        .catch(reportError);
+    }, 220);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [accessToken, directoryQuery, reportError]);
+
+  useEffect(() => {
+    if (!accessToken || !selectedConversationId) {
+      setMessages([]);
+      return;
+    }
+
+    let cancelled = false;
+    void listMessages(accessToken, selectedConversationId)
+      .then((next) => {
+        if (!cancelled) {
+          setMessages(next);
+        }
+      })
+      .then(() => markConversationRead(accessToken, selectedConversationId))
+      .then(() => refreshConversations(accessToken))
+      .catch((reason) => {
+        if (!cancelled) {
+          reportError(reason);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    accessToken,
+    refreshConversations,
+    reportError,
+    selectedConversationId,
+  ]);
+
+  useLayoutEffect(() => {
+    const composer = composerRef.current;
+    if (!composer) {
+      return;
+    }
+    composer.style.height = "auto";
+    composer.style.height = `${Math.min(composer.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
+    composer.style.overflowY =
+      composer.scrollHeight > MAX_COMPOSER_HEIGHT ? "auto" : "hidden";
+  }, [draft]);
+
+  useLayoutEffect(() => {
+    const scroller = messageScrollRef.current;
+    if (scroller) {
+      scroller.scrollTop = scroller.scrollHeight;
+    }
+  }, [messages, selectedConversationId]);
 
   const directoryResults = useMemo(() => {
     const normalized = directoryQuery.trim().toLowerCase();
     return accounts
-      .filter((account) => account.account_id !== activeAccountId)
+      .filter((account) => account.account_id !== activeAccount?.account_id)
       .filter((account) => {
         if (!normalized) {
           return true;
@@ -185,31 +294,31 @@ export function App() {
         );
       })
       .slice(0, 12);
-  }, [accounts, activeAccountId, directoryQuery]);
+  }, [accounts, activeAccount?.account_id, directoryQuery]);
 
   async function openDirectConversation(peerAccountId: string) {
-    if (!activeAccountId) {
+    if (!accessToken) {
       return;
     }
     setBusy(true);
     setError(null);
     try {
       const conversation = await createDirectConversation(
-        activeAccountId,
+        accessToken,
         peerAccountId,
       );
-      await refreshConversations(activeAccountId);
+      await refreshConversations(accessToken);
       setSelectedConversationId(conversation.conversation_id);
       setDirectoryQuery("");
     } catch (reason) {
-      setError(readableError(reason));
+      reportError(reason);
     } finally {
       setBusy(false);
     }
   }
 
   async function submitMessage() {
-    if (!activeAccountId || !selectedConversationId || !draft.trim() || busy) {
+    if (!accessToken || !selectedConversationId || !draft.trim() || busy) {
       return;
     }
 
@@ -220,46 +329,66 @@ export function App() {
     setError(null);
     try {
       const created = await sendMessage(
-        activeAccountId,
+        accessToken,
         selectedConversationId,
         body,
         clientMessageId,
       );
       appendMessage(created);
-      await refreshConversations(activeAccountId);
+      await refreshConversations(accessToken);
     } catch (reason) {
       setDraft(body);
-      setError(readableError(reason));
+      reportError(reason);
     } finally {
       setBusy(false);
     }
   }
 
-  if (!activeAccount) {
+  async function performLogout() {
+    if (accessToken) {
+      try {
+        await logoutAccount(accessToken);
+      } catch {
+        // Local logout still clears the client session if the service is down.
+      }
+    }
+    clearSession();
+    setError(null);
+  }
+
+  if (authChecking && !activeAccount) {
+    return <LoadingScreen />;
+  }
+
+  if (!session || !activeAccount) {
     return (
-      <Onboarding
-        accounts={accounts}
+      <AuthScreen
+        busy={busy}
         error={error}
-        showCreate={showCreateAccount}
-        onShowCreate={() => setShowCreateAccount(true)}
-        onSelect={(accountId) => {
-          setActiveAccountId(accountId);
-          setError(null);
-        }}
-        onCreate={async (username, displayName) => {
+        onLogin={async (username, password) => {
           setBusy(true);
           setError(null);
           try {
-            const account = await createAccount({ username, displayName });
-            await refreshAccounts();
-            setActiveAccountId(account.account_id);
+            saveSession(await loginAccount({ username, password }));
           } catch (reason) {
             setError(readableError(reason));
           } finally {
             setBusy(false);
           }
         }}
-        busy={busy}
+        onRegister={async (username, displayName, password) => {
+          setBusy(true);
+          setError(null);
+          try {
+            saveSession(
+              await registerAccount({ username, displayName, password }),
+            );
+          } catch (reason) {
+            setError(readableError(reason));
+          } finally {
+            setBusy(false);
+          }
+        }}
       />
     );
   }
@@ -275,13 +404,10 @@ export function App() {
           </div>
           <button
             className="icon-button"
-            title="Switch local development profile"
-            onClick={() => {
-              setActiveAccountId(null);
-              sessionStorage.removeItem(SESSION_ACCOUNT_KEY);
-            }}
+            title="Log out"
+            onClick={() => void performLogout()}
           >
-            ⇄
+            ⎋
           </button>
         </header>
 
@@ -297,12 +423,13 @@ export function App() {
             id="directory-search"
             value={directoryQuery}
             onChange={(event) => setDirectoryQuery(event.target.value)}
-            placeholder="Search local users"
+            placeholder="Search registered users"
+            autoComplete="off"
           />
           {directoryQuery && (
             <div className="directory-results">
               {directoryResults.length === 0 ? (
-                <p className="empty-small">No matching local users.</p>
+                <p className="empty-small">No matching registered users.</p>
               ) : (
                 directoryResults.map((account) => (
                   <button
@@ -332,7 +459,7 @@ export function App() {
           </div>
           {conversations.length === 0 ? (
             <p className="empty-sidebar">
-              Search for another local profile above to start the first chat.
+              Search for another registered user above to start the first chat.
             </p>
           ) : (
             conversations.map((conversation) => {
@@ -360,7 +487,7 @@ export function App() {
                   <span className="conversation-copy">
                     <span className="conversation-topline">
                       <strong>
-                        {conversationPeer?.display_name ?? "Unknown local user"}
+                        {conversationPeer?.display_name ?? "Unknown user"}
                       </strong>
                       <time>{relativeTime(conversation.last_message_at)}</time>
                     </span>
@@ -370,7 +497,9 @@ export function App() {
                   </span>
                   {conversation.unread_count > 0 && (
                     <span className="unread-badge">
-                      {Math.min(conversation.unread_count, 99)}
+                      {conversation.unread_count > 99
+                        ? "99+"
+                        : conversation.unread_count}
                     </span>
                   )}
                 </button>
@@ -385,80 +514,92 @@ export function App() {
           <>
             <header className="chat-header">
               <div>
-                <h1>{peer?.display_name ?? "Direct conversation"}</h1>
-                <p>
-                  {peer ? `@${peer.username}` : selectedConversation.peer_account_id}
-                </p>
+                <h1>{peer?.display_name ?? "Conversation"}</h1>
+                <p>{peer ? `@${peer.username}` : selectedConversation.peer_account_id}</p>
               </div>
               <span className="dev-pill">PLAINTEXT DEV V0</span>
             </header>
 
-            <div className="message-scroll">
-              {messages.length === 0 ? (
-                <div className="empty-chat">
-                  <div className="empty-icon">✦</div>
-                  <h2>Conversation created</h2>
-                  <p>Send the first local development message.</p>
-                </div>
-              ) : (
-                <div className="message-stack">
-                  {messages.map((message) => {
-                    const mine = message.sender_account_id === activeAccountId;
-                    return (
-                      <article
-                        key={message.message_id}
-                        className={`message-row ${mine ? "mine" : "theirs"}`}
-                      >
-                        <div className="message-bubble">
-                          <p>{message.body}</p>
-                          <time>{formatClock(message.created_at)}</time>
-                        </div>
-                      </article>
-                    );
-                  })}
-                </div>
-              )}
-              <div ref={messageEndRef} />
+            <div className="message-scroll" ref={messageScrollRef}>
+              <div className="message-stack">
+                {messages.length === 0 ? (
+                  <div className="empty-chat">
+                    <div className="empty-icon">✦</div>
+                    <h2>No messages yet</h2>
+                    <p>Send the first message in this local development chat.</p>
+                  </div>
+                ) : (
+                  messages.map((message) => (
+                    <div
+                      key={message.message_id}
+                      className={`message-row ${
+                        message.sender_account_id === activeAccount.account_id
+                          ? "mine"
+                          : ""
+                      }`}
+                    >
+                      <div className="message-bubble">
+                        <p>{message.body}</p>
+                        <time>{formatClock(message.created_at)}</time>
+                      </div>
+                    </div>
+                  ))
+                )}
+                <div ref={messageEndRef} />
+              </div>
             </div>
 
-            <footer className="composer">
+            <form
+              className="composer"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void submitMessage();
+              }}
+            >
               <textarea
+                ref={composerRef}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
+                  if (
+                    event.key === "Enter" &&
+                    !event.shiftKey &&
+                    !event.nativeEvent.isComposing
+                  ) {
                     event.preventDefault();
                     void submitMessage();
                   }
                 }}
-                placeholder="Write a message…"
+                placeholder="Write a message"
                 rows={1}
+                maxLength={8_000}
               />
               <button
                 className="send-button"
+                type="submit"
                 disabled={busy || !draft.trim()}
-                onClick={() => void submitMessage()}
               >
                 Send
               </button>
-            </footer>
+            </form>
           </>
         ) : (
           <div className="empty-chat landing">
-            <div className="empty-icon">◎</div>
-            <h1>Basic chat vertical slice</h1>
+            <div className="empty-icon">⌁</div>
+            <h1>Secure Chat</h1>
             <p>
-              Select a conversation, or search for another local development
-              profile to begin.
+              Choose a conversation or search for another registered user. The
+              current message payload remains plaintext only for this local
+              development stage.
             </p>
           </div>
         )}
 
         {error && (
           <button className="error-banner" onClick={() => setError(null)}>
-            <strong>Something went wrong</strong>
+            <span>!</span>
             <span>{error}</span>
-            <span aria-hidden>×</span>
+            <span>×</span>
           </button>
         )}
       </section>
@@ -466,89 +607,158 @@ export function App() {
   );
 }
 
-function Onboarding(props: {
-  accounts: Account[];
-  error: string | null;
-  showCreate: boolean;
+interface AuthScreenProps {
   busy: boolean;
-  onShowCreate(): void;
-  onSelect(accountId: string): void;
-  onCreate(username: string, displayName: string): Promise<void>;
-}) {
+  error: string | null;
+  onLogin(username: string, password: string): Promise<void>;
+  onRegister(
+    username: string,
+    displayName: string,
+    password: string,
+  ): Promise<void>;
+}
+
+function AuthScreen(props: AuthScreenProps) {
+  const [mode, setMode] = useState<"login" | "register">("register");
   const [username, setUsername] = useState("");
   const [displayName, setDisplayName] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [localError, setLocalError] = useState<string | null>(null);
+
+  function switchMode(next: "login" | "register") {
+    setMode(next);
+    setLocalError(null);
+  }
 
   return (
     <main className="onboarding-shell">
-      <section className="onboarding-card">
-        <p className="eyebrow">Secure Chat · Local development</p>
-        <h1>Choose a local profile</h1>
+      <section className="onboarding-card auth-card">
+        <p className="eyebrow">Secure Chat · Local Development</p>
+        <h1>{mode === "register" ? "Create your account" : "Welcome back"}</h1>
         <p className="onboarding-intro">
-          This stage deliberately validates the chat product loop before the
-          E2EE payload is inserted. Profiles here are local development actors,
-          not the final authentication system.
+          Register a username and password, then sign in as that account. This
+          replaces the old local-profile picker. Passwords are stored as
+          Argon2id hashes; messages are not yet end-to-end encrypted.
         </p>
 
-        {props.accounts.length > 0 && (
-          <div className="profile-grid">
-            {props.accounts.map((account) => (
-              <button
-                key={account.account_id}
-                className="profile-card"
-                onClick={() => props.onSelect(account.account_id)}
-              >
-                <span className="avatar large">{initials(account.display_name)}</span>
-                <strong>{account.display_name}</strong>
-                <span>@{account.username}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
-        {!props.showCreate ? (
-          <button className="primary-button" onClick={props.onShowCreate}>
-            Create another local profile
-          </button>
-        ) : (
-          <form
-            className="create-profile-form"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void props.onCreate(username, displayName);
-            }}
+        <div className="auth-tabs" role="tablist" aria-label="Authentication mode">
+          <button
+            className={mode === "register" ? "active" : ""}
+            type="button"
+            onClick={() => switchMode("register")}
           >
-            <label>
-              Username
-              <input
-                value={username}
-                onChange={(event) => setUsername(event.target.value)}
-                placeholder="alice"
-                minLength={3}
-                maxLength={32}
-                required
-              />
-            </label>
+            Register
+          </button>
+          <button
+            className={mode === "login" ? "active" : ""}
+            type="button"
+            onClick={() => switchMode("login")}
+          >
+            Log in
+          </button>
+        </div>
+
+        <form
+          className="auth-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setLocalError(null);
+            if (mode === "register" && password !== confirmPassword) {
+              setLocalError("Passwords do not match.");
+              return;
+            }
+            if (mode === "register") {
+              void props.onRegister(username, displayName, password);
+            } else {
+              void props.onLogin(username, password);
+            }
+          }}
+        >
+          <label>
+            Username
+            <input
+              value={username}
+              onChange={(event) => setUsername(event.target.value)}
+              placeholder="bihrys1"
+              minLength={3}
+              maxLength={32}
+              pattern="[A-Za-z0-9_]+"
+              autoComplete="username"
+              autoFocus
+              required
+            />
+            <small>3–32 letters, numbers, or underscore.</small>
+          </label>
+
+          {mode === "register" && (
             <label>
               Display name
               <input
                 value={displayName}
                 onChange={(event) => setDisplayName(event.target.value)}
-                placeholder="Alice"
+                placeholder="Bihrys"
                 maxLength={64}
+                autoComplete="name"
                 required
               />
             </label>
-            <button
-              className="primary-button"
-              type="submit"
-              disabled={props.busy}
-            >
-              {props.busy ? "Creating…" : "Create profile"}
-            </button>
-          </form>
-        )}
+          )}
 
-        {props.error && <p className="form-error">{props.error}</p>}
+          <label>
+            Password
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              minLength={8}
+              maxLength={128}
+              autoComplete={
+                mode === "register" ? "new-password" : "current-password"
+              }
+              required
+            />
+            {mode === "register" && <small>At least 8 characters.</small>}
+          </label>
+
+          {mode === "register" && (
+            <label>
+              Confirm password
+              <input
+                type="password"
+                value={confirmPassword}
+                onChange={(event) => setConfirmPassword(event.target.value)}
+                minLength={8}
+                maxLength={128}
+                autoComplete="new-password"
+                required
+              />
+            </label>
+          )}
+
+          <button className="primary-button auth-submit" type="submit" disabled={props.busy}>
+            {props.busy
+              ? "Please wait…"
+              : mode === "register"
+                ? "Create account"
+                : "Log in"}
+          </button>
+        </form>
+
+        {(localError || props.error) && (
+          <p className="form-error">{localError ?? props.error}</p>
+        )}
+      </section>
+    </main>
+  );
+}
+
+function LoadingScreen() {
+  return (
+    <main className="onboarding-shell">
+      <section className="onboarding-card loading-card">
+        <p className="eyebrow">Secure Chat</p>
+        <h1>Restoring your session…</h1>
       </section>
     </main>
   );
@@ -556,19 +766,20 @@ function Onboarding(props: {
 
 async function handleServerEvent(
   event: ServerEvent,
+  accessToken: string,
   activeAccountId: string,
   selectedConversationId: string | null,
   appendMessage: (message: ChatMessage) => void,
   replaceMessages: (messages: ChatMessage[]) => void,
-  refreshConversations: (accountId: string) => Promise<void>,
+  refreshConversations: (accessToken: string) => Promise<void>,
 ) {
   if (event.type === "connected") {
-    await refreshConversations(activeAccountId);
+    await refreshConversations(accessToken);
     if (selectedConversationId) {
-      const latest = await listMessages(activeAccountId, selectedConversationId);
+      const latest = await listMessages(accessToken, selectedConversationId);
       replaceMessages(latest);
-      await markConversationRead(activeAccountId, selectedConversationId);
-      await refreshConversations(activeAccountId);
+      await markConversationRead(accessToken, selectedConversationId);
+      await refreshConversations(accessToken);
     }
     return;
   }
@@ -578,14 +789,37 @@ async function handleServerEvent(
     if (message.conversation_id === selectedConversationId) {
       appendMessage(message);
       if (message.sender_account_id !== activeAccountId) {
-        await markConversationRead(activeAccountId, message.conversation_id);
+        await markConversationRead(accessToken, message.conversation_id);
       }
     }
-    await refreshConversations(activeAccountId);
+    await refreshConversations(accessToken);
   }
 
   if (event.type === "conversation_read") {
-    await refreshConversations(activeAccountId);
+    await refreshConversations(accessToken);
+  }
+}
+
+function readStoredSession(): AuthSession | null {
+  const raw = localStorage.getItem(AUTH_SESSION_KEY);
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<AuthSession>;
+    if (
+      typeof parsed.access_token !== "string" ||
+      typeof parsed.expires_at !== "string" ||
+      !parsed.account ||
+      typeof parsed.account.account_id !== "string"
+    ) {
+      localStorage.removeItem(AUTH_SESSION_KEY);
+      return null;
+    }
+    return parsed as AuthSession;
+  } catch {
+    localStorage.removeItem(AUTH_SESSION_KEY);
+    return null;
   }
 }
 
@@ -600,12 +834,14 @@ function readableError(reason: unknown): string {
 }
 
 function initials(value: string): string {
-  return value
-    .trim()
-    .split(/\s+/)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "")
-    .join("") || "?";
+  return (
+    value
+      .trim()
+      .split(/\s+/)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase() ?? "")
+      .join("") || "?"
+  );
 }
 
 function socketStatusLabel(status: SocketStatus): string {

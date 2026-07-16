@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.bihrys.chat.linux",
   "build": {
-    "beforeDevCommand": "pnpm dev",
+    "beforeDevCommand": "pnpm --dir .. dev",
     "devUrl": "http://127.0.0.1:1420",
-    "beforeBuildCommand": "pnpm build",
+    "beforeBuildCommand": "pnpm --dir .. build",
     "frontendDist": "../dist"
   },
   "app": {
@@ -16,7 +16,7 @@
         "width": 1280,
         "height": 800,
         "minWidth": 900,
-        "minHeight": 600,
+        "minHeight": 640,
         "resizable": true
       }
     ],

@@ -1,10 +1,9 @@
 //! Public development API for the first complete one-to-one chat loop.
 //!
-//! This API is intentionally available only in `CHAT_ENV=local`. The actor is
-//! selected with `X-Chat-Account-Id` during the non-encrypted development
-//! phase. The header is an explicit temporary seam, not an authentication
-//! design. A later authenticated client identity can replace it without
-//! changing the conversation and message application APIs.
+//! This API is intentionally available only in `CHAT_ENV=local`. Requests are
+//! authenticated with opaque bearer sessions issued by `auth-service`. Message
+//! payloads are still plaintext in this development phase; the authentication
+//! boundary can remain when the payload is replaced by an E2EE envelope.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -25,7 +24,7 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
-use chat_server_core::{ApiError, local_dev_cors};
+use chat_server_core::{ApiError, auth::SessionVerifier, local_dev_cors};
 
 use crate::{
     application::{canonical_pair, validate_message_body},
@@ -33,13 +32,13 @@ use crate::{
     infrastructure::MailboxRepository,
 };
 
-const ACCOUNT_HEADER: &str = "x-chat-account-id";
 const DEFAULT_HISTORY_LIMIT: u16 = 100;
 const MAX_HISTORY_LIMIT: u16 = 200;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
     pub(crate) mailbox: MailboxRepository,
+    pub(crate) sessions: SessionVerifier,
     pub(crate) events: EventHub,
 }
 
@@ -89,7 +88,7 @@ struct MessageHistoryQuery {
 
 #[derive(Debug, Deserialize)]
 struct WebSocketQuery {
-    account_id: Uuid,
+    access_token: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -133,6 +132,10 @@ async fn readyz(State(state): State<AppState>) -> Result<&'static str, ApiError>
         tracing::error!(?error, "mailbox database readiness check failed");
         ApiError::internal("mailbox database unavailable")
     })?;
+    state.sessions.healthcheck().await.map_err(|error| {
+        tracing::error!(?error, "mailbox authentication readiness check failed");
+        ApiError::internal("authentication database unavailable")
+    })?;
     Ok("ready")
 }
 
@@ -140,7 +143,7 @@ async fn list_conversations(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Vec<ConversationResponse>>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = actor_from_headers(&state, &headers).await?;
     let conversations = state
         .mailbox
         .list_conversations(actor)
@@ -160,7 +163,7 @@ async fn create_direct_conversation(
     headers: HeaderMap,
     Json(request): Json<CreateDirectConversationRequest>,
 ) -> Result<(StatusCode, Json<ConversationResponse>), ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = actor_from_headers(&state, &headers).await?;
     canonical_pair(actor, request.peer_account_id)?;
 
     let conversation = state
@@ -181,7 +184,7 @@ async fn list_messages(
     Path(conversation_id): Path<Uuid>,
     Query(query): Query<MessageHistoryQuery>,
 ) -> Result<Json<Vec<MessageWire>>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
 
     let limit = i64::from(
@@ -205,7 +208,7 @@ async fn create_message(
     Path(conversation_id): Path<Uuid>,
     Json(request): Json<CreateMessageRequest>,
 ) -> Result<(StatusCode, Json<MessageWire>), ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
     let body = validate_message_body(&request.body)?;
 
@@ -239,7 +242,7 @@ async fn mark_read(
     headers: HeaderMap,
     Path(conversation_id): Path<Uuid>,
 ) -> Result<Json<MarkReadResponse>, ApiError> {
-    let actor = actor_from_headers(&headers)?;
+    let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
 
     let last_read_seq = state
@@ -275,7 +278,12 @@ async fn websocket_upgrade(
     websocket: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
     ensure_local_mode()?;
-    Ok(websocket.on_upgrade(move |socket| websocket_session(socket, state, query.account_id)))
+    let session = state
+        .sessions
+        .authenticate_token(&query.access_token)
+        .await?;
+    let account_id = session.account_id;
+    Ok(websocket.on_upgrade(move |socket| websocket_session(socket, state, account_id)))
 }
 
 async fn websocket_session(socket: WebSocket, state: AppState, account_id: Uuid) {
@@ -348,16 +356,13 @@ async fn ensure_member(
     Ok(())
 }
 
-fn actor_from_headers(headers: &HeaderMap) -> Result<Uuid, ApiError> {
+async fn actor_from_headers(state: &AppState, headers: &HeaderMap) -> Result<Uuid, ApiError> {
     ensure_local_mode()?;
-    let value = headers
-        .get(ACCOUNT_HEADER)
-        .ok_or_else(|| ApiError::unauthorized("missing X-Chat-Account-Id header"))?
-        .to_str()
-        .map_err(|_| ApiError::unauthorized("invalid X-Chat-Account-Id header"))?;
-
-    Uuid::parse_str(value)
-        .map_err(|_| ApiError::unauthorized("X-Chat-Account-Id is not a valid UUID"))
+    Ok(state
+        .sessions
+        .authenticate_headers(headers)
+        .await?
+        .account_id)
 }
 
 fn ensure_local_mode() -> Result<(), ApiError> {

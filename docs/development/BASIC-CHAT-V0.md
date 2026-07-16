@@ -1,15 +1,16 @@
-# Basic Chat V0 — Local Development Vertical Slice
+# Basic Chat V0 — Authenticated Local Development Slice
 
 ## Purpose
 
-This phase deliberately completes the smallest real chat product loop before the
-end-to-end encryption payload is inserted.
-
-The runtime topology already follows the future deployment shape:
+This phase completes a real account and one-to-one chat loop before the E2EE
+message envelope is inserted.
 
 ```text
 Linux Tauri / browser client
         │
+        ├── Auth Service     :61001 ──> chat_auth
+        │        │
+        │        └── account-service internal contract
         ├── Account Service  :61002 ──> chat_identity
         │
         └── Mailbox Store    :62003 ──> chat_mailbox
@@ -17,68 +18,54 @@ Linux Tauri / browser client
                   └── WebSocket realtime events
 ```
 
-All processes still run on the same Linux development computer. Moving the
-services to remote hosts later must not require rewriting the conversation UI or
-message application model.
+Each service owns its database. Account and mailbox services validate bearer
+sessions through the auth-service introspection API; they do not read
+`chat_auth` directly.
 
-## Explicit security status
+## Security status
 
-`Basic Chat V0` is **not E2EE yet**.
+Registration and login are implemented for local development:
 
-The message database stores:
+- user-selected username, display name, and password;
+- explicit Argon2id password hashes;
+- opaque random bearer tokens;
+- only token digests are stored in PostgreSQL;
+- seven-day local sessions and logout revocation;
+- account and mailbox APIs require bearer authentication.
+
+Messages are **not E2EE yet**. `chat_mailbox` still stores:
 
 ```text
 payload_format = 0  => plaintext_dev_v0
 body            = development plaintext
 ```
 
-The plaintext API is guarded by `CHAT_ENV=local`, and the UI displays
-`PLAINTEXT DEV V0` in the conversation header. This is an intentional temporary
-seam. Do not expose these endpoints to an untrusted network.
+All current APIs are restricted to `CHAT_ENV=local`. Do not bind or expose this
+slice to an untrusted network. Browser session storage and the WebSocket token
+query are temporary local-development choices, not the final production token
+transport.
 
-The next crypto phase replaces the development body with an opaque encrypted
-message envelope while retaining the stable identifiers and product flow:
+## Implemented behavior
 
-```text
-conversation_id
-message_id
-client_message_id
-message_seq
-created_at
-```
-
-## Implemented product behavior
-
-- local development profiles;
-- direct conversation creation with one canonical conversation per account pair;
-- PostgreSQL message persistence;
-- idempotent client message IDs scoped to a conversation and sender;
-- chronological message history;
-- conversation ordering by latest activity;
-- unread counters;
-- read positions;
-- WebSocket realtime delivery events;
-- reconnect with exponential backoff;
-- state resynchronization from PostgreSQL after reconnect;
+- registration and login with a custom username;
+- claiming an old pre-auth local profile by registering its username once;
+- authenticated account search;
+- one canonical direct conversation per account pair;
+- PostgreSQL message persistence and history recovery;
+- idempotent client message IDs;
+- unread counters and read positions;
+- WebSocket realtime events and reconnect;
 - two-client testing on one computer;
-- automated HTTP + WebSocket smoke test.
+- automated registration, authentication, HTTP, PostgreSQL, and WebSocket smoke
+  test.
 
 PostgreSQL is the source of truth. WebSocket events are only a low-latency
-notification channel, so a disconnect or service restart does not define message
-durability.
+notification channel.
 
-## One-time setup
-
-```bash
-cd ~/Projects/chat
-cargo xtask bootstrap
-```
-
-## Daily basic-chat development
+## Daily development
 
 ```bash
 cd ~/Projects/chat
-
 cargo xtask infra up
 cargo xtask chat up
 cargo xtask chat status
@@ -86,63 +73,84 @@ cargo xtask chat smoke
 cargo xtask linux dev
 ```
 
-The smoke test creates disposable local accounts, opens a direct conversation,
-verifies a WebSocket event, verifies PostgreSQL history, checks the unread count,
-and verifies mark-read behavior.
+`chat up` normalizes the local `.env`, generates the internal local service
+credential when it is missing, then starts:
+
+1. `auth-service`;
+2. `account-service`;
+3. `mailbox-store`.
 
 ## Test Alice and Bob on the same computer
 
-Keep the Tauri window as Alice. Open the Vite URL printed by `cargo xtask linux
-dev` in a regular browser or private browser window as Bob, normally:
+Use the Tauri window for Alice and a private browser window for Bob:
 
-```text
-http://127.0.0.1:1420/
+```bash
+# terminal 1
+cargo xtask linux dev
+
+# terminal 2
+chromium --incognito http://127.0.0.1:1420/
 ```
 
-Create/select two different local profiles, start a conversation, and send in
-both directions.
+Register two different usernames. Search the second username from the first
+client, create a conversation, and send in both directions.
 
-Because Tauri and the browser have separate session-storage contexts, they can
-act as two clients while all backend services remain on the same machine.
+## Public API summary
 
-## API summary
+### Auth Service
+
+```text
+POST /v1/auth/register
+POST /v1/auth/login
+GET  /v1/auth/me
+POST /v1/auth/logout
+GET  /v1/auth/introspect
+```
 
 ### Account Service
 
 ```text
-GET  /healthz
-GET  /readyz
-GET  /v1/dev/accounts?query=&limit=
-POST /v1/dev/accounts
-GET  /v1/dev/accounts/{account_id}
+GET /v1/accounts?query=&limit=
+GET /v1/accounts/{account_id}
 ```
 
 ### Mailbox Store
 
-All HTTP endpoints below require the development-only header:
-
 ```text
-X-Chat-Account-Id: <UUID>
-```
-
-```text
-GET  /healthz
-GET  /readyz
 GET  /v1/conversations
 POST /v1/conversations/direct
 GET  /v1/conversations/{conversation_id}/messages
 POST /v1/conversations/{conversation_id}/messages
 POST /v1/conversations/{conversation_id}/read
-GET  /v1/ws?account_id=<UUID>
+GET  /v1/ws?access_token=<local-development-token>
 ```
 
-The header/query actor selection is not authentication. It exists only to test
-two local clients before the real authentication and device-identity phases.
+HTTP account and mailbox routes require:
 
-## Stop only the basic chat services
+```text
+Authorization: Bearer <access-token>
+```
+
+## Linux desktop notes
+
+Use the supported launcher:
+
+```bash
+cargo xtask linux dev
+```
+
+The Tauri configuration uses explicit `pnpm --dir ..` hooks so invoking Tauri
+from the native directory also finds the frontend scripts. The launcher does
+not manually push or pop the kitty keyboard-protocol stack; fish owns that
+state. It only restores ordinary `stty` flags on exit.
+
+The chat layout is fixed to the WebView viewport, with the message list as the
+only scrolling chat region. The composer remains in the final grid row and its
+textarea grows only to a bounded height, preventing it from moving beyond the
+niri-managed window.
+
+## Stop
 
 ```bash
 cargo xtask chat down
 ```
-
-Infrastructure can remain running for the next development session.
