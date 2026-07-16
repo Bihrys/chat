@@ -23,11 +23,12 @@ use chat_server_core::{ApiError, auth::SessionVerifier, local_dev_cors};
 
 use crate::{
     application::{
-        canonical_pair, validate_group_name, validate_initial_group_members, validate_message_body,
+        canonical_pair, validate_group_join_message, validate_group_lookup_identifier,
+        validate_group_name, validate_initial_group_members, validate_message_body,
     },
     domain::{
-        ConversationRecord, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord, MessageWire,
-        ServerEvent,
+        ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord, GroupMemberRecord,
+        GroupRecord, GroupRole, MessageRecord, MessageWire, ServerEvent,
     },
     infrastructure::{ContactVerifier, MailboxRepository},
 };
@@ -99,6 +100,16 @@ struct CreateGroupRequest {
 }
 
 #[derive(Debug, Deserialize)]
+struct GroupLookupQuery {
+    identifier: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CreateGroupJoinRequest {
+    message: String,
+}
+
+#[derive(Debug, Deserialize)]
 struct AddGroupMemberRequest {
     account_id: Uuid,
 }
@@ -122,6 +133,33 @@ struct ConversationResponse {
     last_message_at: Option<String>,
     unread_count: i64,
     last_message: Option<MessageWire>,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupDiscoveryResponse {
+    group_id: Uuid,
+    conversation_id: Uuid,
+    group_code: String,
+    name: String,
+    member_count: i64,
+    actor_role: Option<&'static str>,
+    join_request_status: Option<&'static str>,
+}
+
+#[derive(Debug, Serialize)]
+struct GroupJoinRequestResponse {
+    request_id: Uuid,
+    group_id: Uuid,
+    applicant_account_id: Uuid,
+    message: String,
+    status: &'static str,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateGroupJoinRequestResponse {
+    request_id: Uuid,
 }
 
 #[derive(Debug, Serialize)]
@@ -161,9 +199,22 @@ pub(crate) fn router(state: AppState) -> Router {
         )
         .route("/v1/conversations/{conversation_id}/read", post(mark_read))
         .route("/v1/groups", post(create_group))
+        .route("/v1/groups/lookup", get(lookup_group))
         .route(
             "/v1/groups/{group_id}",
             get(get_group).delete(dissolve_group),
+        )
+        .route(
+            "/v1/groups/{group_id}/join-requests",
+            get(list_group_join_requests).post(create_group_join_request),
+        )
+        .route(
+            "/v1/groups/{group_id}/join-requests/{request_id}/accept",
+            post(accept_group_join_request),
+        )
+        .route(
+            "/v1/groups/{group_id}/join-requests/{request_id}/reject",
+            post(reject_group_join_request),
         )
         .route("/v1/groups/{group_id}/members", post(add_group_member))
         .route(
@@ -333,6 +384,103 @@ async fn create_group(
     Ok((StatusCode::CREATED, Json(group.into())))
 }
 
+async fn lookup_group(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Query(query): Query<GroupLookupQuery>,
+) -> Result<Json<GroupDiscoveryResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let identifier = validate_group_lookup_identifier(&query.identifier)?;
+    let group = state
+        .mailbox
+        .lookup_group(&identifier, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(group_not_found)?;
+    Ok(Json(group.into()))
+}
+
+async fn create_group_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<Uuid>,
+    Json(request): Json<CreateGroupJoinRequest>,
+) -> Result<(StatusCode, Json<CreateGroupJoinRequestResponse>), ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let message = validate_group_join_message(&request.message)?;
+    let request = state
+        .mailbox
+        .create_group_join_request(group_id, actor, &message)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            ApiError::conflict(
+                "group_join_request_not_created",
+                "you are already a member or already have a pending request",
+            )
+        })?;
+    publish_group_update(&state, group_id, actor, None).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreateGroupJoinRequestResponse {
+            request_id: request.request_id,
+        }),
+    ))
+}
+
+async fn list_group_join_requests(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(group_id): Path<Uuid>,
+) -> Result<Json<Vec<GroupJoinRequestResponse>>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let requests = state
+        .mailbox
+        .list_group_join_requests(group_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            ApiError::forbidden("only group owners and administrators can review join requests")
+        })?;
+    Ok(Json(requests.into_iter().map(Into::into).collect()))
+}
+
+async fn accept_group_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((group_id, request_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    respond_group_join_request(&state, &headers, group_id, request_id, true).await
+}
+
+async fn reject_group_join_request(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((group_id, request_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    respond_group_join_request(&state, &headers, group_id, request_id, false).await
+}
+
+async fn respond_group_join_request(
+    state: &AppState,
+    headers: &HeaderMap,
+    group_id: Uuid,
+    request_id: Uuid,
+    accepted: bool,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(state, headers).await?;
+    let applicant = state
+        .mailbox
+        .respond_group_join_request(group_id, request_id, actor, accepted)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            ApiError::forbidden("group join request is missing or you are not allowed to decide it")
+        })?;
+    publish_group_update(state, group_id, actor, Some(applicant)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn get_group(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -455,18 +603,17 @@ async fn dissolve_group(
 async fn publish_group_update(
     state: &AppState,
     group_id: Uuid,
-    actor: Uuid,
+    _actor: Uuid,
     extra_account: Option<Uuid>,
 ) -> Result<(), ApiError> {
-    let group = state
+    let members = state
         .mailbox
-        .get_group(group_id, actor)
+        .group_member_ids(group_id)
         .await
-        .map_err(internal_error)?
-        .ok_or_else(group_not_found)?;
+        .map_err(internal_error)?;
     let event = ServerEvent::GroupUpdated { group_id };
-    for member in group.members {
-        state.events.publish(member.account_id, event.clone()).await;
+    for account_id in members {
+        state.events.publish(account_id, event.clone()).await;
     }
     if let Some(account_id) = extra_account {
         state.events.publish(account_id, event).await;
@@ -611,6 +758,34 @@ impl From<ConversationRecord> for ConversationResponse {
             last_message_at: conversation.last_message_at.map(format_time),
             unread_count: conversation.unread_count,
             last_message: conversation.last_message.map(message_to_wire),
+        }
+    }
+}
+
+impl From<GroupDiscoveryRecord> for GroupDiscoveryResponse {
+    fn from(group: GroupDiscoveryRecord) -> Self {
+        Self {
+            group_id: group.group_id,
+            conversation_id: group.conversation_id,
+            group_code: group.group_code,
+            name: group.name,
+            member_count: group.member_count,
+            actor_role: group.actor_role.map(GroupRole::as_str),
+            join_request_status: group.join_request_status.map(|status| status.as_str()),
+        }
+    }
+}
+
+impl From<GroupJoinRequestRecord> for GroupJoinRequestResponse {
+    fn from(request: GroupJoinRequestRecord) -> Self {
+        Self {
+            request_id: request.request_id,
+            group_id: request.group_id,
+            applicant_account_id: request.applicant_account_id,
+            message: request.message,
+            status: request.status.as_str(),
+            created_at: format_time(request.created_at),
+            updated_at: format_time(request.updated_at),
         }
     }
 }

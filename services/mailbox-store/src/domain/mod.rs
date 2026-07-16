@@ -92,6 +92,62 @@ pub(crate) struct GroupRecord {
     pub(crate) members: Vec<GroupMemberRecord>,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GroupJoinRequestStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+impl GroupJoinRequestStatus {
+    pub(crate) const fn from_i16(value: i16) -> Option<Self> {
+        match value {
+            0 => Some(Self::Pending),
+            1 => Some(Self::Accepted),
+            2 => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn as_i16(self) -> i16 {
+        match self {
+            Self::Pending => 0,
+            Self::Accepted => 1,
+            Self::Rejected => 2,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GroupDiscoveryRecord {
+    pub(crate) group_id: Uuid,
+    pub(crate) conversation_id: Uuid,
+    pub(crate) group_code: String,
+    pub(crate) name: String,
+    pub(crate) member_count: i64,
+    pub(crate) actor_role: Option<GroupRole>,
+    pub(crate) join_request_status: Option<GroupJoinRequestStatus>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct GroupJoinRequestRecord {
+    pub(crate) request_id: Uuid,
+    pub(crate) group_id: Uuid,
+    pub(crate) applicant_account_id: Uuid,
+    pub(crate) message: String,
+    pub(crate) status: GroupJoinRequestStatus,
+    pub(crate) created_at: OffsetDateTime,
+    pub(crate) updated_at: OffsetDateTime,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct MessageRecord {
     pub(crate) message_seq: i64,

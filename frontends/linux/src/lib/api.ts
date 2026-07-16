@@ -10,6 +10,8 @@ import type {
   Conversation,
   FriendRequestMailbox,
   GroupDetails,
+  GroupDiscovery,
+  GroupJoinRequest,
   GroupRole,
 } from "./types";
 
@@ -191,6 +193,59 @@ export async function createGroup(
     headers: bearerHeaders(accessToken, true),
     body: JSON.stringify({ name, member_account_ids: memberAccountIds }),
   });
+}
+
+
+export async function lookupGroup(
+  accessToken: string,
+  identifier: string,
+): Promise<GroupDiscovery> {
+  const params = new URLSearchParams({ identifier: identifier.trim() });
+  return requestJson<GroupDiscovery>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/lookup?${params.toString()}`,
+    { headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function requestToJoinGroup(
+  accessToken: string,
+  groupId: string,
+  message: string,
+): Promise<{ request_id: string }> {
+  return requestJson<{ request_id: string }>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/join-requests`,
+    {
+      method: "POST",
+      headers: bearerHeaders(accessToken, true),
+      body: JSON.stringify({ message }),
+    },
+  );
+}
+
+export async function listGroupJoinRequests(
+  accessToken: string,
+  groupId: string,
+): Promise<GroupJoinRequest[]> {
+  return requestJson<GroupJoinRequest[]>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/join-requests`,
+    { headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function respondGroupJoinRequest(
+  accessToken: string,
+  groupId: string,
+  requestId: string,
+  response: "accept" | "reject",
+): Promise<void> {
+  await requestJson<void>(
+    `${MAILBOX_SERVICE_URL}/v1/groups/${groupId}/join-requests/${requestId}/${response}`,
+    {
+      method: "POST",
+      headers: bearerHeaders(accessToken, true),
+      body: "{}",
+    },
+  );
 }
 
 export async function getGroup(

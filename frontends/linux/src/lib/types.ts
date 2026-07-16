@@ -73,6 +73,29 @@ export interface GroupDetails {
   members: GroupMember[];
 }
 
+
+export type GroupJoinRequestStatus = "pending" | "accepted" | "rejected";
+
+export interface GroupDiscovery {
+  group_id: string;
+  conversation_id: string;
+  group_code: string;
+  name: string;
+  member_count: number;
+  actor_role: GroupRole | null;
+  join_request_status: GroupJoinRequestStatus | null;
+}
+
+export interface GroupJoinRequest {
+  request_id: string;
+  group_id: string;
+  applicant_account_id: string;
+  message: string;
+  status: GroupJoinRequestStatus;
+  created_at: string;
+  updated_at: string;
+}
+
 export type ServerEvent =
   | { type: "connected"; payload: { account_id: string } }
   | { type: "message_created"; payload: { message: ChatMessage } }

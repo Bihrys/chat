@@ -1,0 +1,21 @@
+{
+  "rust-analyzer.check.command": "check",
+  "rust-analyzer.check.allTargets": true,
+  "rust-analyzer.cargo.allTargets": true,
+  "rust-analyzer.procMacro.enable": true,
+  "rust-analyzer.files.excludeDirs": [
+    "frontends/linux/native/target",
+    "target",
+    "var"
+  ],
+  "files.watcherExclude": {
+    "**/target/**": true,
+    "**/frontends/linux/native/target/**": true,
+    "**/var/**": true
+  },
+  "search.exclude": {
+    "**/target": true,
+    "**/frontends/linux/native/target": true,
+    "**/var": true
+  }
+}

@@ -6,13 +6,16 @@ use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 use crate::domain::{
-    ConversationKind, ConversationRecord, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord,
+    ConversationKind, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
+    GroupJoinRequestStatus, GroupMemberRecord, GroupRecord, GroupRole, MessageRecord,
 };
 
 const DIRECT_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/mailbox/0001_basic_chat.sql");
 const GROUP_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/mailbox/0002_groups.sql");
+const GROUP_DISCOVERY_MIGRATION: &str =
+    include_str!("../../../../infra/native/postgresql/migrations/mailbox/0003_group_discovery.sql");
 
 #[derive(Clone)]
 pub(crate) struct MailboxRepository {
@@ -37,6 +40,10 @@ impl MailboxRepository {
             .execute(&pool)
             .await
             .context("failed to apply group-chat migration")?;
+        sqlx::raw_sql(GROUP_DISCOVERY_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply group-discovery migration")?;
 
         Ok(Self { pool })
     }
@@ -717,6 +724,319 @@ impl MailboxRepository {
         }))
     }
 
+    pub(crate) async fn group_member_ids(&self, group_id: Uuid) -> Result<Vec<Uuid>> {
+        let rows: Vec<Uuid> = sqlx::query_scalar(
+            r"
+            SELECT member.account_id
+            FROM group_members member
+            JOIN group_conversations g ON g.group_id = member.group_id
+            WHERE member.group_id = $1
+              AND g.dissolved_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to list group member ids")?;
+        Ok(rows)
+    }
+
+    pub(crate) async fn lookup_group(
+        &self,
+        identifier: &str,
+        actor: Uuid,
+    ) -> Result<Option<GroupDiscoveryRecord>> {
+        let row = sqlx::query(
+            r"
+            SELECT g.group_id,
+                   g.conversation_id,
+                   g.group_code,
+                   g.name,
+                   COUNT(members.account_id)::BIGINT AS member_count,
+                   actor_member.role AS actor_role,
+                   latest_request.status AS join_request_status
+            FROM group_conversations g
+            JOIN group_members members ON members.group_id = g.group_id
+            LEFT JOIN group_members actor_member
+              ON actor_member.group_id = g.group_id
+             AND actor_member.account_id = $2
+            LEFT JOIN LATERAL (
+                SELECT request.status
+                FROM group_join_requests request
+                WHERE request.group_id = g.group_id
+                  AND request.applicant_account_id = $2
+                ORDER BY request.created_at DESC
+                LIMIT 1
+            ) latest_request ON TRUE
+            WHERE g.dissolved_at IS NULL
+              AND (
+                    UPPER(g.group_code) = UPPER($1)
+                 OR g.group_id::TEXT = LOWER($1)
+              )
+            GROUP BY g.group_id,
+                     g.conversation_id,
+                     g.group_code,
+                     g.name,
+                     actor_member.role,
+                     latest_request.status
+            ",
+        )
+        .bind(identifier)
+        .bind(actor)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to look up group")?;
+
+        row.map(|row| -> Result<GroupDiscoveryRecord> {
+            let actor_role = match row.try_get::<Option<i16>, _>("actor_role")? {
+                Some(value) => Some(
+                    GroupRole::from_i16(value)
+                        .ok_or_else(|| anyhow!("invalid actor group role {value}"))?,
+                ),
+                None => None,
+            };
+            let join_request_status = match row.try_get::<Option<i16>, _>("join_request_status")? {
+                Some(value) => Some(
+                    GroupJoinRequestStatus::from_i16(value)
+                        .ok_or_else(|| anyhow!("invalid group join request status {value}"))?,
+                ),
+                None => None,
+            };
+            Ok(GroupDiscoveryRecord {
+                group_id: row.try_get("group_id")?,
+                conversation_id: row.try_get("conversation_id")?,
+                group_code: row.try_get("group_code")?,
+                name: row.try_get("name")?,
+                member_count: row.try_get("member_count")?,
+                actor_role,
+                join_request_status,
+            })
+        })
+        .transpose()
+    }
+
+    pub(crate) async fn create_group_join_request(
+        &self,
+        group_id: Uuid,
+        applicant: Uuid,
+        message: &str,
+    ) -> Result<Option<GroupJoinRequestRecord>> {
+        let request_id = Uuid::now_v7();
+        let row = sqlx::query(
+            r"
+            INSERT INTO group_join_requests (
+                request_id,
+                group_id,
+                applicant_account_id,
+                message,
+                status
+            )
+            SELECT $1, g.group_id, $2, $3, 0
+            FROM group_conversations g
+            WHERE g.group_id = $4
+              AND g.dissolved_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM group_members member
+                  WHERE member.group_id = g.group_id
+                    AND member.account_id = $2
+              )
+              AND NOT EXISTS (
+                  SELECT 1
+                  FROM group_join_requests pending
+                  WHERE pending.group_id = g.group_id
+                    AND pending.applicant_account_id = $2
+                    AND pending.status = 0
+              )
+            RETURNING request_id,
+                      group_id,
+                      applicant_account_id,
+                      message,
+                      status,
+                      created_at,
+                      updated_at
+            ",
+        )
+        .bind(request_id)
+        .bind(applicant)
+        .bind(message)
+        .bind(group_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to create group join request")?;
+
+        row.map(row_to_group_join_request).transpose()
+    }
+
+    pub(crate) async fn list_group_join_requests(
+        &self,
+        group_id: Uuid,
+        actor: Uuid,
+    ) -> Result<Option<Vec<GroupJoinRequestRecord>>> {
+        let role: Option<i16> = sqlx::query_scalar(
+            r"
+            SELECT member.role
+            FROM group_members member
+            JOIN group_conversations g ON g.group_id = member.group_id
+            WHERE member.group_id = $1
+              AND member.account_id = $2
+              AND g.dissolved_at IS NULL
+            ",
+        )
+        .bind(group_id)
+        .bind(actor)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to verify group join-request permission")?;
+        let Some(role) = role.and_then(GroupRole::from_i16) else {
+            return Ok(None);
+        };
+        if !matches!(role, GroupRole::Owner | GroupRole::Admin) {
+            return Ok(None);
+        }
+
+        let rows = sqlx::query(
+            r"
+            SELECT request_id,
+                   group_id,
+                   applicant_account_id,
+                   message,
+                   status,
+                   created_at,
+                   updated_at
+            FROM group_join_requests
+            WHERE group_id = $1
+              AND status = 0
+            ORDER BY created_at ASC
+            ",
+        )
+        .bind(group_id)
+        .fetch_all(&self.pool)
+        .await
+        .context("failed to list group join requests")?;
+        rows.into_iter()
+            .map(row_to_group_join_request)
+            .collect::<Result<Vec<_>>>()
+            .map(Some)
+    }
+
+    pub(crate) async fn respond_group_join_request(
+        &self,
+        group_id: Uuid,
+        request_id: Uuid,
+        actor: Uuid,
+        accepted: bool,
+    ) -> Result<Option<Uuid>> {
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin group join-request transaction")?;
+        let permission = sqlx::query(
+            r"
+            SELECT g.conversation_id, member.role
+            FROM group_conversations g
+            JOIN group_members member
+              ON member.group_id = g.group_id
+             AND member.account_id = $2
+            WHERE g.group_id = $1
+              AND g.dissolved_at IS NULL
+            FOR UPDATE OF g
+            ",
+        )
+        .bind(group_id)
+        .bind(actor)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("failed to verify group join-request decision permission")?;
+        let Some(permission) = permission else {
+            return Ok(None);
+        };
+        let role = GroupRole::from_i16(permission.try_get("role")?)
+            .ok_or_else(|| anyhow!("invalid group role"))?;
+        if !matches!(role, GroupRole::Owner | GroupRole::Admin) {
+            return Ok(None);
+        }
+        let conversation_id: Uuid = permission.try_get("conversation_id")?;
+
+        let request = sqlx::query(
+            r"
+            SELECT applicant_account_id
+            FROM group_join_requests
+            WHERE request_id = $1
+              AND group_id = $2
+              AND status = 0
+            FOR UPDATE
+            ",
+        )
+        .bind(request_id)
+        .bind(group_id)
+        .fetch_optional(&mut *transaction)
+        .await
+        .context("failed to fetch pending group join request")?;
+        let Some(request) = request else {
+            return Ok(None);
+        };
+        let applicant: Uuid = request.try_get("applicant_account_id")?;
+
+        if accepted {
+            sqlx::query(
+                r"
+                INSERT INTO group_members (group_id, account_id, role, added_by)
+                VALUES ($1, $2, 0, $3)
+                ON CONFLICT (group_id, account_id) DO NOTHING
+                ",
+            )
+            .bind(group_id)
+            .bind(applicant)
+            .bind(actor)
+            .execute(&mut *transaction)
+            .await
+            .context("failed to add approved group applicant")?;
+            sqlx::query(
+                r"
+                INSERT INTO group_reads (conversation_id, account_id, last_read_seq)
+                VALUES ($1, $2, 0)
+                ON CONFLICT (conversation_id, account_id) DO NOTHING
+                ",
+            )
+            .bind(conversation_id)
+            .bind(applicant)
+            .execute(&mut *transaction)
+            .await
+            .context("failed to initialize approved group applicant read state")?;
+        }
+
+        sqlx::query(
+            r"
+            UPDATE group_join_requests
+            SET status = $3,
+                decided_by = $4,
+                updated_at = now()
+            WHERE request_id = $1
+              AND group_id = $2
+              AND status = 0
+            ",
+        )
+        .bind(request_id)
+        .bind(group_id)
+        .bind(if accepted {
+            GroupJoinRequestStatus::Accepted.as_i16()
+        } else {
+            GroupJoinRequestStatus::Rejected.as_i16()
+        })
+        .bind(actor)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to update group join request")?;
+
+        transaction
+            .commit()
+            .await
+            .context("failed to commit group join-request decision")?;
+        Ok(Some(applicant))
+    }
+
     pub(crate) async fn add_group_member(
         &self,
         group_id: Uuid,
@@ -845,6 +1165,20 @@ impl MailboxRepository {
         .await
         .context("failed to identify conversation kind")
     }
+}
+
+fn row_to_group_join_request(row: sqlx::postgres::PgRow) -> Result<GroupJoinRequestRecord> {
+    let status_value: i16 = row.try_get("status")?;
+    Ok(GroupJoinRequestRecord {
+        request_id: row.try_get("request_id")?,
+        group_id: row.try_get("group_id")?,
+        applicant_account_id: row.try_get("applicant_account_id")?,
+        message: row.try_get("message")?,
+        status: GroupJoinRequestStatus::from_i16(status_value)
+            .ok_or_else(|| anyhow!("invalid group join request status {status_value}"))?,
+        created_at: row.try_get("created_at")?,
+        updated_at: row.try_get("updated_at")?,
+    })
 }
 
 fn public_group_code(group_id: Uuid) -> String {

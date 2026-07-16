@@ -20,14 +20,18 @@ import {
   listContacts,
   listConversations,
   listFriendRequests,
+  listGroupJoinRequests,
   listMessages,
   loginAccount,
   logoutAccount,
   lookupAccount,
+  lookupGroup,
   markConversationRead,
   registerAccount,
   removeGroupMember,
+  requestToJoinGroup,
   respondFriendRequest,
+  respondGroupJoinRequest,
   sendFriendRequest,
   sendMessage,
   setGroupMemberRole,
@@ -39,6 +43,8 @@ import type {
   Conversation,
   FriendRequestMailbox,
   GroupDetails,
+  GroupDiscovery,
+  GroupJoinRequest,
   GroupRole,
   ServerEvent,
   SocketStatus,
@@ -55,20 +61,35 @@ import {
   type ThemeMode,
   type Translation,
 } from "../lib/preferences";
-import { SettingsIcon } from "./PreferenceIcons";
+import {
+  ChatIcon,
+  ChevronIcon,
+  ContactsIcon,
+  FriendRequestIcon,
+  GroupIcon,
+  MenuIcon,
+  PlusIcon,
+  SearchIcon,
+  SettingsIcon,
+} from "./PreferenceIcons";
 import { SettingsPanel } from "./SettingsPanel";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
 const MAX_COMPOSER_HEIGHT = 132;
 const EMPTY_REQUESTS: FriendRequestMailbox = { incoming: [], outgoing: [] };
 
-type SidebarView = "chats" | "contacts" | "requests";
+type PrimaryView = "chats" | "contacts";
+type DiscoveryMode = "friend" | "group";
+type ChatListEntry =
+  | { kind: "conversation"; conversation: Conversation; peer?: Account }
+  | { kind: "contact"; contact: Account };
 
 export function App() {
   const [backend, setBackend] = useState("checking");
   const [locale, setLocale] = useState<Locale>(readStoredLocale);
   const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [railMenuOpen, setRailMenuOpen] = useState(false);
   const t = translations[locale];
 
   const [session, setSession] = useState<AuthSession | null>(readStoredSession);
@@ -86,21 +107,32 @@ export function App() {
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("offline");
-  const [sidebarView, setSidebarView] = useState<SidebarView>("chats");
+  const [primaryView, setPrimaryView] = useState<PrimaryView>("chats");
+  const [chatSearch, setChatSearch] = useState("");
+  const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [draft, setDraft] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
+  const [discoveryOpen, setDiscoveryOpen] = useState(false);
+  const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>("friend");
   const [lookupQuery, setLookupQuery] = useState("");
   const [lookupResult, setLookupResult] = useState<Account | null>(null);
   const [requestMessage, setRequestMessage] = useState("");
+  const [groupLookupResult, setGroupLookupResult] = useState<GroupDiscovery | null>(
+    null,
+  );
+  const [groupJoinMessage, setGroupJoinMessage] = useState("");
+
+  const [requestsOpen, setRequestsOpen] = useState(false);
   const [groupCreateOpen, setGroupCreateOpen] = useState(false);
   const [groupName, setGroupName] = useState("");
   const [groupContactIds, setGroupContactIds] = useState<string[]>([]);
   const [groupManageOpen, setGroupManageOpen] = useState(false);
   const [groupDetails, setGroupDetails] = useState<GroupDetails | null>(null);
   const groupDetailsRef = useRef<GroupDetails | null>(null);
+  const [groupJoinRequests, setGroupJoinRequests] = useState<GroupJoinRequest[]>([]);
   const [copied, setCopied] = useState<string | null>(null);
 
   const accessToken = session?.access_token ?? null;
@@ -133,6 +165,21 @@ export function App() {
     selectedConversation?.kind === "direct" && selectedConversation.peer_account_id
       ? accountById.get(selectedConversation.peer_account_id)
       : undefined;
+
+  const directConversationByPeer = useMemo(() => {
+    const map = new Map<string, Conversation>();
+    for (const conversation of conversations) {
+      if (conversation.kind === "direct" && conversation.peer_account_id) {
+        map.set(conversation.peer_account_id, conversation);
+      }
+    }
+    return map;
+  }, [conversations]);
+
+  const groupConversations = useMemo(
+    () => conversations.filter((conversation) => conversation.kind === "group"),
+    [conversations],
+  );
 
   useLayoutEffect(() => {
     applyDocumentPreferences(locale, theme);
@@ -234,7 +281,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-    // accessToken is the stable identity of the session.
+    // accessToken is the stable session identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
 
@@ -270,7 +317,18 @@ export function App() {
             const openGroup = groupDetailsRef.current;
             if (openGroup && event.type === "group_updated") {
               try {
-                setGroupDetails(await getGroup(accessToken, openGroup.group_id));
+                const details = await loadGroupWithAccounts(
+                  accessToken,
+                  openGroup.group_id,
+                  accountById,
+                  mergeKnownAccounts,
+                );
+                setGroupDetails(details);
+                if (groupManageOpen && details.actor_role !== "member") {
+                  setGroupJoinRequests(
+                    await listGroupJoinRequests(accessToken, details.group_id),
+                  );
+                }
               } catch {
                 setGroupDetails(null);
                 setGroupManageOpen(false);
@@ -295,7 +353,10 @@ export function App() {
   }, [
     accessToken,
     activeAccount,
+    accountById,
     appendMessage,
+    groupManageOpen,
+    mergeKnownAccounts,
     refreshConversations,
     refreshSocial,
     reportError,
@@ -330,7 +391,12 @@ export function App() {
       return;
     }
     let cancelled = false;
-    void loadGroupWithAccounts(accessToken, selectedConversation.group_id)
+    void loadGroupWithAccounts(
+      accessToken,
+      selectedConversation.group_id,
+      accountById,
+      mergeKnownAccounts,
+    )
       .then((details) => {
         if (!cancelled) setGroupDetails(details);
       })
@@ -338,7 +404,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [accessToken, reportError, selectedConversation]);
+  }, [accessToken, accountById, mergeKnownAccounts, reportError, selectedConversation]);
 
   useLayoutEffect(() => {
     const composer = composerRef.current;
@@ -354,29 +420,21 @@ export function App() {
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
   }, [messages, selectedConversationId]);
 
-  async function loadGroupWithAccounts(token: string, groupId: string) {
-    const details = await getGroup(token, groupId);
-    const missing = details.members
-      .map((member) => member.account_id)
-      .filter((accountId) => !accountById.has(accountId));
-    if (missing.length > 0) {
-      const loaded = await Promise.all(
-        missing.map((accountId) => getAccount(token, accountId)),
-      );
-      mergeKnownAccounts(loaded);
-    }
-    return details;
-  }
-
   async function openDirectConversation(peerAccountId: string) {
     if (!accessToken) return;
+    const existing = directConversationByPeer.get(peerAccountId);
+    if (existing) {
+      setSelectedConversationId(existing.conversation_id);
+      setPrimaryView("chats");
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       const conversation = await createDirectConversation(accessToken, peerAccountId);
       await refreshConversations(accessToken);
       setSelectedConversationId(conversation.conversation_id);
-      setSidebarView("chats");
+      setPrimaryView("chats");
     } catch (reason) {
       reportError(reason);
     } finally {
@@ -406,16 +464,38 @@ export function App() {
     }
   }
 
+  function openDiscovery(mode: DiscoveryMode) {
+    setDiscoveryMode(mode);
+    setDiscoveryOpen(true);
+    setLookupQuery("");
+    setLookupResult(null);
+    setGroupLookupResult(null);
+    setRequestMessage("");
+    setGroupJoinMessage("");
+    setError(null);
+  }
+
   async function performLookup() {
     if (!accessToken || !lookupQuery.trim()) return;
     setBusy(true);
     setLookupResult(null);
+    setGroupLookupResult(null);
     setError(null);
     try {
-      const account = await lookupAccount(accessToken, lookupQuery);
-      setLookupResult(account);
-      setRequestMessage(formatTemplate(t.defaultRequest, activeAccount?.display_name ?? ""));
-      mergeKnownAccounts([account]);
+      if (discoveryMode === "friend") {
+        const account = await lookupAccount(accessToken, lookupQuery);
+        setLookupResult(account);
+        setRequestMessage(
+          formatTemplate(t.defaultRequest, activeAccount?.display_name ?? ""),
+        );
+        mergeKnownAccounts([account]);
+      } else {
+        const group = await lookupGroup(accessToken, lookupQuery);
+        setGroupLookupResult(group);
+        setGroupJoinMessage(
+          formatTemplate(t.defaultGroupRequest, activeAccount?.display_name ?? ""),
+        );
+      }
     } catch (reason) {
       reportError(reason);
     } finally {
@@ -443,6 +523,27 @@ export function App() {
     }
   }
 
+  async function performGroupJoinRequest() {
+    if (!accessToken || !groupLookupResult || !groupJoinMessage.trim()) return;
+    setBusy(true);
+    try {
+      await requestToJoinGroup(
+        accessToken,
+        groupLookupResult.group_id,
+        groupJoinMessage.trim(),
+      );
+      setGroupLookupResult({
+        ...groupLookupResult,
+        join_request_status: "pending",
+      });
+      setNotice(t.joinRequestSent);
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function performRequestResponse(
     requestId: string,
     response: "accept" | "reject",
@@ -452,6 +553,9 @@ export function App() {
     try {
       await respondFriendRequest(accessToken, requestId, response);
       await refreshSocial(accessToken);
+      if (response === "accept") {
+        await refreshConversations(accessToken);
+      }
     } catch (reason) {
       reportError(reason);
     } finally {
@@ -470,7 +574,38 @@ export function App() {
       setGroupCreateOpen(false);
       setGroupName("");
       setGroupContactIds([]);
-      setSidebarView("chats");
+      setPrimaryView("chats");
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openGroupManagement() {
+    if (!accessToken || !groupDetails) return;
+    setBusy(true);
+    try {
+      const details = await loadGroupWithAccounts(
+        accessToken,
+        groupDetails.group_id,
+        accountById,
+        mergeKnownAccounts,
+      );
+      setGroupDetails(details);
+      if (details.actor_role === "owner" || details.actor_role === "admin") {
+        const requests = await listGroupJoinRequests(accessToken, details.group_id);
+        setGroupJoinRequests(requests);
+        const applicants = await Promise.all(
+          requests
+            .filter((request) => !accountById.has(request.applicant_account_id))
+            .map((request) => getAccount(accessToken, request.applicant_account_id)),
+        );
+        mergeKnownAccounts(applicants);
+      } else {
+        setGroupJoinRequests([]);
+      }
+      setGroupManageOpen(true);
     } catch (reason) {
       reportError(reason);
     } finally {
@@ -480,8 +615,38 @@ export function App() {
 
   async function refreshOpenGroup() {
     if (!accessToken || !groupDetails) return;
-    setGroupDetails(await loadGroupWithAccounts(accessToken, groupDetails.group_id));
+    const details = await loadGroupWithAccounts(
+      accessToken,
+      groupDetails.group_id,
+      accountById,
+      mergeKnownAccounts,
+    );
+    setGroupDetails(details);
+    if (details.actor_role === "owner" || details.actor_role === "admin") {
+      setGroupJoinRequests(await listGroupJoinRequests(accessToken, details.group_id));
+    }
     await refreshConversations(accessToken);
+  }
+
+  async function performGroupJoinResponse(
+    requestId: string,
+    response: "accept" | "reject",
+  ) {
+    if (!accessToken || !groupDetails) return;
+    setBusy(true);
+    try {
+      await respondGroupJoinRequest(
+        accessToken,
+        groupDetails.group_id,
+        requestId,
+        response,
+      );
+      await refreshOpenGroup();
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function performAddGroupMember(accountId: string) {
@@ -553,10 +718,11 @@ export function App() {
       try {
         await logoutAccount(accessToken);
       } catch {
-        // Clear the local session even when the local service is unavailable.
+        // Always clear the local session.
       }
     }
     clearSession();
+    setSettingsOpen(false);
     setError(null);
   }
 
@@ -632,153 +798,159 @@ export function App() {
   ).length;
 
   return (
-    <main className="chat-shell">
-      <aside className="sidebar">
-        <header className="account-header">
-          <div className="avatar">{initials(activeAccount.display_name)}</div>
-          <div className="account-copy">
-            <strong>{activeAccount.display_name}</strong>
-            <span>{activeAccount.chat_id}</span>
-          </div>
-          <div className="account-actions">
-            <button
-              className="icon-button"
-              type="button"
-              title={t.settings}
-              onClick={() => setSettingsOpen(true)}
-            >
-              <SettingsIcon />
-            </button>
-            <button
-              className="icon-button"
-              type="button"
-              title={t.logout}
-              onClick={() => void performLogout()}
-            >
-              ⎋
-            </button>
-          </div>
-        </header>
+    <main className="wechat-shell">
+      <aside className="app-rail">
+        <button className="rail-avatar" type="button" title={activeAccount.display_name}>
+          {initials(activeAccount.display_name)}
+        </button>
 
-        <div className="identity-strip">
-          <button onClick={() => void copyValue("chat", activeAccount.chat_id)}>
-            <span>{t.chatId}</span>
-            <strong>{activeAccount.chat_id}</strong>
-            <small>{copied === "chat" ? t.copied : t.copy}</small>
-          </button>
-          <button onClick={() => void copyValue("uuid", activeAccount.account_id)}>
-            <span>{t.accountUuid}</span>
-            <strong>{shortUuid(activeAccount.account_id)}</strong>
-            <small>{copied === "uuid" ? t.copied : t.copy}</small>
-          </button>
-        </div>
-
-        <div className="connection-strip">
-          <span className={`status-dot ${socketStatus}`} />
-          <span>{socketStatusLabel(socketStatus, t)}</span>
-          <span className="backend-state">
-            {t.rustCore}: {backend}
-          </span>
-        </div>
-
-        <nav className="sidebar-tabs">
+        <nav className="rail-nav" aria-label="primary">
           <button
-            className={sidebarView === "chats" ? "active" : ""}
-            onClick={() => setSidebarView("chats")}
+            className={primaryView === "chats" ? "active" : ""}
+            type="button"
+            title={t.chats}
+            onClick={() => setPrimaryView("chats")}
           >
-            {t.chats}
+            <ChatIcon />
+            {totalUnread(conversations) > 0 && (
+              <span className="rail-badge">{boundedCount(totalUnread(conversations))}</span>
+            )}
           </button>
           <button
-            className={sidebarView === "contacts" ? "active" : ""}
-            onClick={() => setSidebarView("contacts")}
+            className={primaryView === "contacts" ? "active" : ""}
+            type="button"
+            title={t.addressBook}
+            onClick={() => setPrimaryView("contacts")}
           >
-            {t.contacts}
-          </button>
-          <button
-            className={sidebarView === "requests" ? "active" : ""}
-            onClick={() => setSidebarView("requests")}
-          >
-            {t.requests}
-            {pendingIncoming > 0 && <span className="tab-badge">{pendingIncoming}</span>}
+            <ContactsIcon />
+            {pendingIncoming > 0 && (
+              <span className="rail-badge">{boundedCount(pendingIncoming)}</span>
+            )}
           </button>
         </nav>
 
-        <div className="sidebar-content">
-          {sidebarView === "chats" && (
-            <ChatsView
-              conversations={conversations}
-              selectedConversationId={selectedConversationId}
-              accountById={accountById}
-              locale={locale}
-              t={t}
-              onSelect={setSelectedConversationId}
-              onCreateGroup={() => setGroupCreateOpen(true)}
-            />
+        <div className="rail-bottom">
+          {railMenuOpen && (
+            <div className="rail-menu">
+              <button
+                type="button"
+                onClick={() => {
+                  setRailMenuOpen(false);
+                  setSettingsOpen(true);
+                }}
+              >
+                <SettingsIcon />
+                <span>{t.settings}</span>
+              </button>
+            </div>
           )}
-
-          {sidebarView === "contacts" && (
-            <ContactsView
-              contacts={contacts}
-              lookupQuery={lookupQuery}
-              lookupResult={lookupResult}
-              requestMessage={requestMessage}
-              busy={busy}
-              t={t}
-              onLookupQuery={setLookupQuery}
-              onLookup={() => void performLookup()}
-              onRequestMessage={setRequestMessage}
-              onSendRequest={() => void performFriendRequest()}
-              onChat={(accountId) => void openDirectConversation(accountId)}
-            />
-          )}
-
-          {sidebarView === "requests" && (
-            <RequestsView
-              mailbox={friendRequests}
-              busy={busy}
-              t={t}
-              onRespond={(requestId, response) =>
-                void performRequestResponse(requestId, response)
-              }
-            />
-          )}
+          <button
+            className={railMenuOpen ? "active" : ""}
+            type="button"
+            title={t.menu}
+            onClick={() => setRailMenuOpen((open) => !open)}
+          >
+            <MenuIcon />
+          </button>
         </div>
       </aside>
 
-      <section className="chat-panel">
+      <aside className="list-pane">
+        <header className="list-pane-header">
+          <label className="global-search">
+            <SearchIcon />
+            <input
+              value={chatSearch}
+              onChange={(event) => setChatSearch(event.target.value)}
+              placeholder={t.searchChats}
+            />
+          </label>
+          <button
+            className="square-action"
+            type="button"
+            title={t.discover}
+            onClick={() => openDiscovery("friend")}
+          >
+            <PlusIcon />
+          </button>
+        </header>
+
+        {primaryView === "chats" ? (
+          <ChatList
+            conversations={conversations}
+            contacts={contacts}
+            accountById={accountById}
+            selectedConversationId={selectedConversationId}
+            search={chatSearch}
+            locale={locale}
+            t={t}
+            onSelectConversation={setSelectedConversationId}
+            onSelectContact={(accountId) => void openDirectConversation(accountId)}
+          />
+        ) : (
+          <AddressBook
+            contacts={contacts}
+            groups={groupConversations}
+            pendingIncoming={pendingIncoming}
+            groupsExpanded={groupsExpanded}
+            search={chatSearch}
+            t={t}
+            onToggleGroups={() => setGroupsExpanded((expanded) => !expanded)}
+            onOpenRequests={() => setRequestsOpen(true)}
+            onOpenDiscovery={() => openDiscovery("friend")}
+            onOpenContact={(accountId) => void openDirectConversation(accountId)}
+            onOpenGroup={(conversationId) => {
+              setSelectedConversationId(conversationId);
+              setPrimaryView("chats");
+            }}
+          />
+        )}
+      </aside>
+
+      <section className="conversation-pane">
         {selectedConversation ? (
           <>
-            <header className="chat-header">
-              <div>
-                <h1>
-                  {selectedConversation.kind === "group"
-                    ? selectedConversation.group_name
-                    : selectedPeer?.display_name ?? t.conversation}
-                </h1>
-                <p>
-                  {selectedConversation.kind === "group"
-                    ? `${t.groupCode}: ${selectedConversation.group_code} · ${selectedConversation.member_count ?? 0} ${t.members}`
-                    : selectedPeer?.chat_id ?? selectedConversation.peer_account_id}
-                </p>
+            <header className="conversation-header">
+              <div className="conversation-title-block">
+                <Avatar
+                  label={
+                    selectedConversation.kind === "group"
+                      ? selectedConversation.group_name ?? t.group
+                      : selectedPeer?.display_name ?? t.unknownUser
+                  }
+                  group={selectedConversation.kind === "group"}
+                />
+                <span>
+                  <h1>
+                    {selectedConversation.kind === "group"
+                      ? selectedConversation.group_name
+                      : selectedPeer?.display_name ?? t.conversation}
+                  </h1>
+                  <small>
+                    {selectedConversation.kind === "group"
+                      ? `${t.groupCode}: ${selectedConversation.group_code} · ${selectedConversation.member_count ?? 0} ${t.members}`
+                      : selectedPeer?.chat_id ?? selectedConversation.peer_account_id}
+                  </small>
+                </span>
               </div>
-              <div className="chat-header-actions">
+              <div className="conversation-header-actions">
                 {selectedConversation.kind === "group" && (
                   <button
-                    className="secondary-button"
-                    onClick={() => setGroupManageOpen(true)}
+                    className="header-text-button"
+                    type="button"
+                    onClick={() => void openGroupManagement()}
                   >
-                    {t.groupSettings}
+                    ···
                   </button>
                 )}
-                <span className="dev-pill">{t.plaintextDev}</span>
               </div>
             </header>
 
             <div className="message-scroll" ref={messageScrollRef}>
               <div className="message-stack">
                 {messages.length === 0 ? (
-                  <div className="empty-chat">
-                    <div className="empty-icon">✦</div>
+                  <div className="conversation-empty">
+                    <ChatIcon />
                     <h2>{t.emptyMessagesTitle}</h2>
                     <p>{t.emptyMessagesBody}</p>
                   </div>
@@ -791,15 +963,24 @@ export function App() {
                         key={message.message_id}
                         className={`message-row ${mine ? "mine" : ""}`}
                       >
-                        <div className="message-bubble">
+                        {!mine && (
+                          <Avatar
+                            label={sender?.display_name ?? message.sender_account_id}
+                            small
+                          />
+                        )}
+                        <div className="message-body-column">
                           {selectedConversation.kind === "group" && !mine && (
                             <strong className="message-sender">
                               {sender?.display_name ?? shortUuid(message.sender_account_id)}
                             </strong>
                           )}
-                          <p>{message.body}</p>
+                          <div className="message-bubble">
+                            <p>{message.body}</p>
+                          </div>
                           <time>{formatClock(message.created_at)}</time>
                         </div>
+                        {mine && <Avatar label={activeAccount.display_name} small />}
                       </div>
                     );
                   })
@@ -814,6 +995,11 @@ export function App() {
                 void submitMessage();
               }}
             >
+              <div className="composer-tools">
+                <span>☺</span>
+                <span>□</span>
+                <span>⌁</span>
+              </div>
               <textarea
                 ref={composerRef}
                 value={draft}
@@ -842,22 +1028,23 @@ export function App() {
             </form>
           </>
         ) : (
-          <div className="empty-chat landing">
-            <div className="empty-icon">⌁</div>
+          <div className="conversation-empty landing">
+            <ChatIcon />
             <h1>{t.appName}</h1>
-            <p>{t.landingBody}</p>
+            <p>{t.startConversationHint}</p>
+            <small>{socketStatusLabel(socketStatus, t)} · {backend}</small>
           </div>
         )}
 
         {error && (
-          <button className="error-banner" onClick={() => setError(null)}>
+          <button className="error-banner" type="button" onClick={() => setError(null)}>
             <span>!</span>
             <span>{error}</span>
             <span>×</span>
           </button>
         )}
         {notice && (
-          <button className="notice-banner" onClick={() => setNotice(null)}>
+          <button className="notice-banner" type="button" onClick={() => setNotice(null)}>
             <span>✓</span>
             <span>{notice}</span>
             <span>×</span>
@@ -867,76 +1054,99 @@ export function App() {
 
       <SettingsPanel
         open={settingsOpen}
+        account={activeAccount}
         locale={locale}
         theme={theme}
         t={t}
         onLocaleChange={setLocale}
         onThemeChange={setTheme}
+        onLogout={() => void performLogout()}
         onClose={() => setSettingsOpen(false)}
       />
 
-      {groupCreateOpen && (
-        <Modal title={t.createGroup} onClose={() => setGroupCreateOpen(false)} t={t}>
-          <label className="modal-field">
-            {t.groupName}
-            <input
-              value={groupName}
-              onChange={(event) => setGroupName(event.target.value)}
-              maxLength={64}
-              autoFocus
-            />
-          </label>
-          <div className="modal-section-title">{t.chooseContacts}</div>
-          <div className="contact-picker">
-            {contacts.length === 0 ? (
-              <p className="empty-small">{t.noContacts}</p>
-            ) : (
-              contacts.map((account) => (
-                <label key={account.account_id} className="contact-check">
-                  <input
-                    type="checkbox"
-                    checked={groupContactIds.includes(account.account_id)}
-                    onChange={(event) => {
-                      setGroupContactIds((current) =>
-                        event.target.checked
-                          ? [...current, account.account_id]
-                          : current.filter((id) => id !== account.account_id),
-                      );
-                    }}
-                  />
-                  <span className="mini-avatar">{initials(account.display_name)}</span>
-                  <span>
-                    <strong>{account.display_name}</strong>
-                    <small>{account.chat_id}</small>
-                  </span>
-                </label>
-              ))
-            )}
-          </div>
-          <div className="modal-actions">
-            <button className="secondary-button" onClick={() => setGroupCreateOpen(false)}>
-              {t.cancel}
-            </button>
-            <button
-              className="primary-button"
-              disabled={busy || !groupName.trim()}
-              onClick={() => void performCreateGroup()}
-            >
-              {t.create}
-            </button>
-          </div>
+      {discoveryOpen && (
+        <DiscoveryModal
+          mode={discoveryMode}
+          query={lookupQuery}
+          friendResult={lookupResult}
+          groupResult={groupLookupResult}
+          friendMessage={requestMessage}
+          groupMessage={groupJoinMessage}
+          busy={busy}
+          t={t}
+          onModeChange={(mode) => {
+            setDiscoveryMode(mode);
+            setLookupResult(null);
+            setGroupLookupResult(null);
+            setLookupQuery("");
+          }}
+          onQueryChange={setLookupQuery}
+          onSearch={() => void performLookup()}
+          onFriendMessageChange={setRequestMessage}
+          onGroupMessageChange={setGroupJoinMessage}
+          onSendFriendRequest={() => void performFriendRequest()}
+          onSendGroupRequest={() => void performGroupJoinRequest()}
+          onOpenGroup={(conversationId) => {
+            setDiscoveryOpen(false);
+            setSelectedConversationId(conversationId);
+            setPrimaryView("chats");
+          }}
+          onCreateGroup={() => {
+            setDiscoveryOpen(false);
+            setGroupCreateOpen(true);
+          }}
+          onClose={() => setDiscoveryOpen(false)}
+        />
+      )}
+
+      {requestsOpen && (
+        <Modal title={t.newFriends} onClose={() => setRequestsOpen(false)} t={t} wide>
+          <RequestsView
+            mailbox={friendRequests}
+            busy={busy}
+            t={t}
+            onRespond={(requestId, response) =>
+              void performRequestResponse(requestId, response)
+            }
+          />
         </Modal>
+      )}
+
+      {groupCreateOpen && (
+        <CreateGroupModal
+          groupName={groupName}
+          selectedIds={groupContactIds}
+          contacts={contacts}
+          busy={busy}
+          t={t}
+          onNameChange={setGroupName}
+          onToggleContact={(accountId, checked) => {
+            setGroupContactIds((current) =>
+              checked
+                ? [...current, accountId]
+                : current.filter((id) => id !== accountId),
+            );
+          }}
+          onCreate={() => void performCreateGroup()}
+          onClose={() => setGroupCreateOpen(false)}
+        />
       )}
 
       {groupManageOpen && groupDetails && (
         <GroupManagement
           details={groupDetails}
+          joinRequests={groupJoinRequests}
           contacts={contacts}
           accountById={accountById}
           activeAccountId={activeAccount.account_id}
           busy={busy}
           t={t}
+          onCopy={(value) => void copyValue("group", value)}
+          copied={copied === "group"}
           onClose={() => setGroupManageOpen(false)}
+          onJoinResponse={(requestId, response) =>
+            void performGroupJoinResponse(requestId, response)
+          }
           onAdd={(accountId) => void performAddGroupMember(accountId)}
           onRemove={(accountId) => void performRemoveGroupMember(accountId)}
           onRole={(accountId, role) => void performRoleChange(accountId, role)}
@@ -944,6 +1154,656 @@ export function App() {
         />
       )}
     </main>
+  );
+}
+
+function ChatList(props: {
+  conversations: Conversation[];
+  contacts: Account[];
+  accountById: Map<string, Account>;
+  selectedConversationId: string | null;
+  search: string;
+  locale: Locale;
+  t: Translation;
+  onSelectConversation(conversationId: string): void;
+  onSelectContact(accountId: string): void;
+}) {
+  const entries = useMemo<ChatListEntry[]>(() => {
+    const directPeers = new Set<string>();
+    const existing: ChatListEntry[] = props.conversations.map((conversation) => {
+      const peer = conversation.peer_account_id
+        ? props.accountById.get(conversation.peer_account_id)
+        : undefined;
+      if (conversation.kind === "direct" && conversation.peer_account_id) {
+        directPeers.add(conversation.peer_account_id);
+      }
+      return { kind: "conversation", conversation, peer };
+    });
+    const contactEntries: ChatListEntry[] = props.contacts
+      .filter((contact) => !directPeers.has(contact.account_id))
+      .map((contact) => ({ kind: "contact", contact }));
+    return [...existing, ...contactEntries];
+  }, [props.accountById, props.contacts, props.conversations]);
+
+  const query = props.search.trim().toLocaleLowerCase();
+  const filtered = entries.filter((entry) => {
+    if (!query) return true;
+    if (entry.kind === "contact") {
+      return `${entry.contact.display_name} ${entry.contact.chat_id}`
+        .toLocaleLowerCase()
+        .includes(query);
+    }
+    const title = conversationTitle(entry.conversation, entry.peer, props.t);
+    const code =
+      entry.conversation.kind === "group"
+        ? entry.conversation.group_code ?? ""
+        : entry.peer?.chat_id ?? "";
+    return `${title} ${code}`.toLocaleLowerCase().includes(query);
+  });
+
+  return (
+    <div className="chat-list">
+      {filtered.length === 0 ? (
+        <p className="list-empty">{props.t.noChatMatches}</p>
+      ) : (
+        filtered.map((entry) => {
+          if (entry.kind === "contact") {
+            return (
+              <button
+                className="chat-list-row"
+                key={`contact-${entry.contact.account_id}`}
+                type="button"
+                onClick={() => props.onSelectContact(entry.contact.account_id)}
+              >
+                <Avatar label={entry.contact.display_name} />
+                <span className="chat-list-copy">
+                  <strong>{entry.contact.display_name}</strong>
+                  <small>{props.t.startConversationHint}</small>
+                </span>
+              </button>
+            );
+          }
+          const { conversation, peer } = entry;
+          const title = conversationTitle(conversation, peer, props.t);
+          return (
+            <button
+              className={`chat-list-row ${
+                props.selectedConversationId === conversation.conversation_id
+                  ? "selected"
+                  : ""
+              }`}
+              key={conversation.conversation_id}
+              type="button"
+              onClick={() => props.onSelectConversation(conversation.conversation_id)}
+            >
+              <Avatar label={title} group={conversation.kind === "group"} />
+              <span className="chat-list-copy">
+                <span className="chat-list-line">
+                  <strong>{title}</strong>
+                  <time>{formatListTime(conversation.last_message_at, props.locale)}</time>
+                </span>
+                <span className="chat-list-line preview">
+                  <small>{conversation.last_message?.body ?? props.t.noMessagesYet}</small>
+                  {conversation.unread_count > 0 && (
+                    <b>{boundedCount(conversation.unread_count)}</b>
+                  )}
+                </span>
+              </span>
+            </button>
+          );
+        })
+      )}
+    </div>
+  );
+}
+
+function AddressBook(props: {
+  contacts: Account[];
+  groups: Conversation[];
+  pendingIncoming: number;
+  groupsExpanded: boolean;
+  search: string;
+  t: Translation;
+  onToggleGroups(): void;
+  onOpenRequests(): void;
+  onOpenDiscovery(): void;
+  onOpenContact(accountId: string): void;
+  onOpenGroup(conversationId: string): void;
+}) {
+  const query = props.search.trim().toLocaleLowerCase();
+  const contacts = props.contacts.filter((contact) =>
+    `${contact.display_name} ${contact.chat_id}`.toLocaleLowerCase().includes(query),
+  );
+  const groups = props.groups.filter((group) =>
+    `${group.group_name ?? ""} ${group.group_code ?? ""}`
+      .toLocaleLowerCase()
+      .includes(query),
+  );
+
+  return (
+    <div className="address-book">
+      <button className="address-management" type="button" onClick={props.onOpenDiscovery}>
+        <ContactsIcon />
+        <span>{props.t.discover}</span>
+      </button>
+
+      <button className="address-special-row" type="button" onClick={props.onOpenRequests}>
+        <span className="address-special-icon friend"><FriendRequestIcon /></span>
+        <strong>{props.t.newFriends}</strong>
+        {props.pendingIncoming > 0 && <b>{boundedCount(props.pendingIncoming)}</b>}
+      </button>
+
+      <section className="address-section">
+        <button className="address-section-header" type="button" onClick={props.onToggleGroups}>
+          <ChevronIcon className={props.groupsExpanded ? "expanded" : ""} />
+          <strong>{props.t.groups}</strong>
+          <span>{props.groups.length}</span>
+        </button>
+        {props.groupsExpanded && (
+          <div className="address-rows">
+            {groups.map((group) => (
+              <button
+                className="address-row"
+                type="button"
+                key={group.conversation_id}
+                onClick={() => props.onOpenGroup(group.conversation_id)}
+              >
+                <Avatar label={group.group_name ?? props.t.group} group />
+                <span>
+                  <strong>{group.group_name ?? props.t.group}</strong>
+                  <small>{group.group_code}</small>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="address-section">
+        <div className="address-section-header static">
+          <ChevronIcon className="expanded" />
+          <strong>{props.t.contacts}</strong>
+          <span>{props.contacts.length}</span>
+        </div>
+        <div className="address-rows">
+          {contacts.length === 0 ? (
+            <p className="list-empty">{props.t.noContacts}</p>
+          ) : (
+            contacts.map((contact) => (
+              <button
+                className="address-row"
+                type="button"
+                key={contact.account_id}
+                onClick={() => props.onOpenContact(contact.account_id)}
+              >
+                <Avatar label={contact.display_name} />
+                <span>
+                  <strong>{contact.display_name}</strong>
+                  <small>{contact.chat_id}</small>
+                </span>
+              </button>
+            ))
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DiscoveryModal(props: {
+  mode: DiscoveryMode;
+  query: string;
+  friendResult: Account | null;
+  groupResult: GroupDiscovery | null;
+  friendMessage: string;
+  groupMessage: string;
+  busy: boolean;
+  t: Translation;
+  onModeChange(mode: DiscoveryMode): void;
+  onQueryChange(value: string): void;
+  onSearch(): void;
+  onFriendMessageChange(value: string): void;
+  onGroupMessageChange(value: string): void;
+  onSendFriendRequest(): void;
+  onSendGroupRequest(): void;
+  onOpenGroup(conversationId: string): void;
+  onCreateGroup(): void;
+  onClose(): void;
+}) {
+  return (
+    <Modal title={props.t.discover} onClose={props.onClose} t={props.t} wide>
+      <div className="discovery-tabs">
+        <button
+          className={props.mode === "friend" ? "active" : ""}
+          type="button"
+          onClick={() => props.onModeChange("friend")}
+        >
+          <FriendRequestIcon />
+          {props.t.friendDiscovery}
+        </button>
+        <button
+          className={props.mode === "group" ? "active" : ""}
+          type="button"
+          onClick={() => props.onModeChange("group")}
+        >
+          <GroupIcon />
+          {props.t.groupDiscovery}
+        </button>
+      </div>
+
+      <form
+        className="discovery-search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          props.onSearch();
+        }}
+      >
+        <SearchIcon />
+        <input
+          value={props.query}
+          onChange={(event) => props.onQueryChange(event.target.value)}
+          placeholder={
+            props.mode === "friend" ? props.t.searchById : props.t.groupSearchById
+          }
+          autoFocus
+        />
+        <button className="primary-button" disabled={props.busy || !props.query.trim()}>
+          {props.t.search}
+        </button>
+      </form>
+      <p className="discovery-hint">
+        {props.mode === "friend"
+          ? props.t.exactSearchOnly
+          : props.t.exactGroupSearchOnly}
+      </p>
+
+      {props.mode === "friend" && props.friendResult && (
+        <section className="discovery-result">
+          <div className="discovery-result-title">
+            <Avatar label={props.friendResult.display_name} />
+            <span>
+              <strong>{props.friendResult.display_name}</strong>
+              <small>{props.friendResult.chat_id}</small>
+            </span>
+          </div>
+          <label>
+            {props.t.requestMessage}
+            <textarea
+              value={props.friendMessage}
+              maxLength={256}
+              onChange={(event) => props.onFriendMessageChange(event.target.value)}
+            />
+          </label>
+          <button
+            className="primary-button full"
+            type="button"
+            disabled={props.busy || !props.friendMessage.trim()}
+            onClick={props.onSendFriendRequest}
+          >
+            {props.t.sendRequest}
+          </button>
+        </section>
+      )}
+
+      {props.mode === "group" && props.groupResult && (
+        <section className="discovery-result">
+          <div className="discovery-result-title">
+            <Avatar label={props.groupResult.name} group />
+            <span>
+              <strong>{props.groupResult.name}</strong>
+              <small>
+                {props.t.groupCode}: {props.groupResult.group_code} · {props.groupResult.member_count} {props.t.members}
+              </small>
+            </span>
+          </div>
+          {props.groupResult.actor_role ? (
+            <button
+              className="primary-button full"
+              type="button"
+              onClick={() => props.onOpenGroup(props.groupResult!.conversation_id)}
+            >
+              {props.t.openGroup}
+            </button>
+          ) : props.groupResult.join_request_status === "pending" ? (
+            <button className="primary-button full" type="button" disabled>
+              {props.t.awaitingReview}
+            </button>
+          ) : (
+            <>
+              <label>
+                {props.t.joinRequestMessage}
+                <textarea
+                  value={props.groupMessage}
+                  maxLength={256}
+                  onChange={(event) => props.onGroupMessageChange(event.target.value)}
+                />
+              </label>
+              <button
+                className="primary-button full"
+                type="button"
+                disabled={props.busy || !props.groupMessage.trim()}
+                onClick={props.onSendGroupRequest}
+              >
+                {props.t.joinGroup}
+              </button>
+            </>
+          )}
+        </section>
+      )}
+
+      {props.mode === "group" && (
+        <button className="text-link-button" type="button" onClick={props.onCreateGroup}>
+          <PlusIcon /> {props.t.createGroup}
+        </button>
+      )}
+    </Modal>
+  );
+}
+
+function RequestsView(props: {
+  mailbox: FriendRequestMailbox;
+  busy: boolean;
+  t: Translation;
+  onRespond(requestId: string, response: "accept" | "reject"): void;
+}) {
+  const incoming = props.mailbox.incoming.filter(
+    (request) => request.status === "pending",
+  );
+  return (
+    <div className="requests-view">
+      <div className="section-heading">
+        <strong>{props.t.incomingRequests}</strong>
+        <span>{incoming.length}</span>
+      </div>
+      {incoming.length === 0 ? (
+        <p className="list-empty">{props.t.noRequests}</p>
+      ) : (
+        incoming.map((request) => (
+          <div className="request-row" key={request.request_id}>
+            <Avatar label={request.peer.display_name} />
+            <span className="request-copy">
+              <strong>{request.peer.display_name}</strong>
+              <small>{request.message}</small>
+            </span>
+            <button
+              className="secondary-button"
+              disabled={props.busy}
+              onClick={() => props.onRespond(request.request_id, "reject")}
+            >
+              {props.t.reject}
+            </button>
+            <button
+              className="primary-button"
+              disabled={props.busy}
+              onClick={() => props.onRespond(request.request_id, "accept")}
+            >
+              {props.t.accept}
+            </button>
+          </div>
+        ))
+      )}
+
+      <div className="section-heading spaced">
+        <strong>{props.t.outgoingRequests}</strong>
+        <span>{props.mailbox.outgoing.length}</span>
+      </div>
+      {props.mailbox.outgoing.map((request) => (
+        <div className="request-row compact" key={request.request_id}>
+          <Avatar label={request.peer.display_name} />
+          <span className="request-copy">
+            <strong>{request.peer.display_name}</strong>
+            <small>{request.message}</small>
+          </span>
+          <span className={`status-chip ${request.status}`}>
+            {statusLabel(request.status, props.t)}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function CreateGroupModal(props: {
+  groupName: string;
+  selectedIds: string[];
+  contacts: Account[];
+  busy: boolean;
+  t: Translation;
+  onNameChange(value: string): void;
+  onToggleContact(accountId: string, checked: boolean): void;
+  onCreate(): void;
+  onClose(): void;
+}) {
+  return (
+    <Modal title={props.t.createGroup} onClose={props.onClose} t={props.t} wide>
+      <label className="modal-field">
+        {props.t.groupName}
+        <input
+          value={props.groupName}
+          onChange={(event) => props.onNameChange(event.target.value)}
+          maxLength={64}
+          autoFocus
+        />
+      </label>
+      <div className="section-heading">
+        <strong>{props.t.chooseContacts}</strong>
+        <span>{props.selectedIds.length}</span>
+      </div>
+      <div className="contact-picker">
+        {props.contacts.length === 0 ? (
+          <p className="list-empty">{props.t.noContacts}</p>
+        ) : (
+          props.contacts.map((account) => (
+            <label key={account.account_id} className="contact-check">
+              <input
+                type="checkbox"
+                checked={props.selectedIds.includes(account.account_id)}
+                onChange={(event) =>
+                  props.onToggleContact(account.account_id, event.target.checked)
+                }
+              />
+              <Avatar label={account.display_name} small />
+              <span>
+                <strong>{account.display_name}</strong>
+                <small>{account.chat_id}</small>
+              </span>
+            </label>
+          ))
+        )}
+      </div>
+      <div className="modal-actions">
+        <button className="secondary-button" type="button" onClick={props.onClose}>
+          {props.t.cancel}
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          disabled={props.busy || !props.groupName.trim()}
+          onClick={props.onCreate}
+        >
+          {props.t.create}
+        </button>
+      </div>
+    </Modal>
+  );
+}
+
+function GroupManagement(props: {
+  details: GroupDetails;
+  joinRequests: GroupJoinRequest[];
+  contacts: Account[];
+  accountById: Map<string, Account>;
+  activeAccountId: string;
+  busy: boolean;
+  t: Translation;
+  copied: boolean;
+  onCopy(value: string): void;
+  onClose(): void;
+  onJoinResponse(requestId: string, response: "accept" | "reject"): void;
+  onAdd(accountId: string): void;
+  onRemove(accountId: string): void;
+  onRole(accountId: string, role: Exclude<GroupRole, "owner">): void;
+  onDissolve(): void;
+}) {
+  const memberIds = new Set(props.details.members.map((member) => member.account_id));
+  const availableContacts = props.contacts.filter(
+    (contact) => !memberIds.has(contact.account_id),
+  );
+  const canRemove =
+    props.details.actor_role === "owner" || props.details.actor_role === "admin";
+  const canReview = canRemove;
+
+  return (
+    <Modal title={props.t.groupSettings} onClose={props.onClose} t={props.t} wide>
+      <div className="group-summary">
+        <Avatar label={props.details.name} group large />
+        <span>
+          <h3>{props.details.name}</h3>
+          <button
+            className="copy-line"
+            type="button"
+            onClick={() => props.onCopy(props.details.group_code)}
+          >
+            {props.t.groupCode}: {props.details.group_code} · {props.copied ? props.t.copied : props.t.copy}
+          </button>
+        </span>
+      </div>
+
+      <p className="permission-note">
+        {props.details.actor_role === "owner"
+          ? props.t.ownerPermissions
+          : props.details.actor_role === "admin"
+            ? props.t.adminPermissions
+            : props.t.memberPermissions}
+      </p>
+
+      {canReview && (
+        <>
+          <div className="section-heading">
+            <strong>{props.t.groupJoinRequests}</strong>
+            <span>{props.joinRequests.length}</span>
+          </div>
+          {props.joinRequests.length === 0 ? (
+            <p className="list-empty inline">{props.t.noGroupJoinRequests}</p>
+          ) : (
+            <div className="group-request-list">
+              {props.joinRequests.map((request) => {
+                const account = props.accountById.get(request.applicant_account_id);
+                return (
+                  <div className="request-row" key={request.request_id}>
+                    <Avatar label={account?.display_name ?? request.applicant_account_id} />
+                    <span className="request-copy">
+                      <strong>{account?.display_name ?? shortUuid(request.applicant_account_id)}</strong>
+                      <small>{request.message}</small>
+                    </span>
+                    <button
+                      className="secondary-button"
+                      disabled={props.busy}
+                      onClick={() => props.onJoinResponse(request.request_id, "reject")}
+                    >
+                      {props.t.reject}
+                    </button>
+                    <button
+                      className="primary-button"
+                      disabled={props.busy}
+                      onClick={() => props.onJoinResponse(request.request_id, "accept")}
+                    >
+                      {props.t.approve}
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      <div className="section-heading spaced">
+        <strong>{props.t.addMember}</strong>
+        <span>{availableContacts.length}</span>
+      </div>
+      {availableContacts.length === 0 ? (
+        <p className="list-empty inline">{props.t.noContacts}</p>
+      ) : (
+        <div className="add-member-grid">
+          {availableContacts.map((contact) => (
+            <button
+              key={contact.account_id}
+              disabled={props.busy}
+              onClick={() => props.onAdd(contact.account_id)}
+            >
+              <Avatar label={contact.display_name} small />
+              <span>
+                <strong>{contact.display_name}</strong>
+                <small>{contact.chat_id}</small>
+              </span>
+              <b>＋</b>
+            </button>
+          ))}
+        </div>
+      )}
+
+      <div className="section-heading spaced">
+        <strong>{props.t.members}</strong>
+        <span>{props.details.members.length}</span>
+      </div>
+      <div className="member-list">
+        {props.details.members.map((member) => {
+          const account = props.accountById.get(member.account_id);
+          const isSelf = member.account_id === props.activeAccountId;
+          const canRemoveTarget =
+            canRemove &&
+            member.role !== "owner" &&
+            !isSelf &&
+            !(props.details.actor_role === "admin" && member.role === "admin");
+          return (
+            <div className="member-row" key={member.account_id}>
+              <Avatar label={account?.display_name ?? member.account_id} small />
+              <span className="member-copy">
+                <strong>{account?.display_name ?? shortUuid(member.account_id)}</strong>
+                <small>{account?.chat_id ?? shortUuid(member.account_id)}</small>
+              </span>
+              <span className={`role-chip ${member.role}`}>
+                {roleLabel(member.role, props.t)}
+              </span>
+              {props.details.actor_role === "owner" && member.role !== "owner" && (
+                <button
+                  className="text-button"
+                  disabled={props.busy}
+                  onClick={() =>
+                    props.onRole(
+                      member.account_id,
+                      member.role === "admin" ? "member" : "admin",
+                    )
+                  }
+                >
+                  {member.role === "admin" ? props.t.removeAdmin : props.t.setAdmin}
+                </button>
+              )}
+              {canRemoveTarget && (
+                <button
+                  className="danger-text-button"
+                  disabled={props.busy}
+                  onClick={() => props.onRemove(member.account_id)}
+                >
+                  {props.t.remove}
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+
+      {props.details.actor_role === "owner" && (
+        <button
+          className="danger-button"
+          disabled={props.busy}
+          onClick={props.onDissolve}
+        >
+          {props.t.dissolveGroup}
+        </button>
+      )}
+    </Modal>
   );
 }
 
@@ -969,70 +1829,53 @@ function AuthScreen(props: {
   }
 
   return (
-    <main className="onboarding-shell">
-      <button
-        className="onboarding-settings-button"
-        type="button"
-        onClick={props.onOpenSettings}
-      >
+    <main className="auth-shell">
+      <button className="auth-settings" type="button" onClick={props.onOpenSettings}>
         <SettingsIcon />
         <span>{props.t.settings}</span>
       </button>
-      <section className="onboarding-card simple-auth-card">
-        <p className="eyebrow">
-          {props.t.appName} · {props.t.localDevelopment}
-        </p>
+      <section className="auth-card">
+        <div className="auth-logo"><ChatIcon /></div>
         <h1>{screen === "login" ? props.t.welcomeBack : props.t.createAccount}</h1>
-        <p className="onboarding-intro">
-          {screen === "login" ? props.t.loginIntro : props.t.registerIntro}
-        </p>
-
+        <p>{screen === "login" ? props.t.loginIntro : props.t.registerIntro}</p>
         <form
-          className="simple-auth-form"
+          className="auth-form"
           onSubmit={(event) => {
             event.preventDefault();
             setLocalError(null);
-            const normalizedName = name.trim();
-            if (!normalizedName) return;
-            if (screen === "register") {
-              if (password !== confirmPassword) {
-                setLocalError(props.t.passwordsMismatch);
-                return;
-              }
-              void props.onRegister(normalizedName, password);
-            } else {
-              void props.onLogin(normalizedName, password);
+            if (screen === "register" && password !== confirmPassword) {
+              setLocalError(props.t.passwordsMismatch);
+              return;
             }
+            void (screen === "login"
+              ? props.onLogin(name.trim(), password)
+              : props.onRegister(name.trim(), password));
           }}
         >
           <label>
             {props.t.name}
             <input
               value={name}
+              autoComplete="username"
               onChange={(event) => setName(event.target.value)}
-              placeholder={props.t.name}
               minLength={3}
               maxLength={32}
-              pattern="[A-Za-z0-9_]+"
-              autoComplete="username"
-              autoFocus
               required
+              autoFocus
             />
-            {screen === "register" && <small>{props.t.nameHint}</small>}
+            <small>{props.t.nameHint}</small>
           </label>
           <label>
             {props.t.password}
             <input
               type="password"
               value={password}
+              autoComplete={screen === "login" ? "current-password" : "new-password"}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder={props.t.password}
               minLength={8}
               maxLength={128}
-              autoComplete={screen === "login" ? "current-password" : "new-password"}
               required
             />
-            {screen === "register" && <small>{props.t.passwordHint}</small>}
           </label>
           {screen === "register" && (
             <label>
@@ -1040,314 +1883,39 @@ function AuthScreen(props: {
               <input
                 type="password"
                 value={confirmPassword}
+                autoComplete="new-password"
                 onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder={props.t.confirmPassword}
                 minLength={8}
                 maxLength={128}
-                autoComplete="new-password"
                 required
               />
             </label>
           )}
-          <button className="primary-button auth-submit" disabled={props.busy}>
+          {(localError || props.error) && (
+            <p className="auth-error">{localError ?? props.error}</p>
+          )}
+          <button
+            className="primary-button auth-submit"
+            disabled={props.busy || !name.trim() || !password}
+          >
             {props.busy
               ? props.t.pleaseWait
               : screen === "login"
                 ? props.t.login
-                : props.t.createAccount}
+                : props.t.register}
           </button>
         </form>
-
         <button
           className="auth-link"
           type="button"
           onClick={() => changeScreen(screen === "login" ? "register" : "login")}
         >
-          {screen === "login" ? props.t.noAccount : props.t.haveAccount}{" "}
-          <strong>
-            {screen === "login" ? props.t.clickRegister : props.t.backToLogin}
-          </strong>
+          {screen === "login"
+            ? `${props.t.noAccount} ${props.t.clickRegister}`
+            : `${props.t.haveAccount} ${props.t.backToLogin}`}
         </button>
-
-        {(localError || props.error) && (
-          <p className="form-error">{localError ?? props.error}</p>
-        )}
       </section>
     </main>
-  );
-}
-
-function ChatsView(props: {
-  conversations: Conversation[];
-  selectedConversationId: string | null;
-  accountById: Map<string, Account>;
-  locale: Locale;
-  t: Translation;
-  onSelect(id: string): void;
-  onCreateGroup(): void;
-}) {
-  return (
-    <div className="view-stack">
-      <div className="view-toolbar">
-        <strong>{props.t.conversations}</strong>
-        <button className="small-primary" onClick={props.onCreateGroup}>
-          + {props.t.createGroup}
-        </button>
-      </div>
-      <div className="conversation-list">
-        {props.conversations.length === 0 ? (
-          <p className="empty-sidebar">{props.t.noConversations}</p>
-        ) : (
-          props.conversations.map((conversation) => {
-            const peer = conversation.peer_account_id
-              ? props.accountById.get(conversation.peer_account_id)
-              : undefined;
-            const title =
-              conversation.kind === "group"
-                ? conversation.group_name ?? props.t.group
-                : peer?.display_name ?? props.t.unknownUser;
-            const subtitle =
-              conversation.kind === "group"
-                ? conversation.group_code
-                : peer?.chat_id;
-            return (
-              <button
-                key={conversation.conversation_id}
-                className={`conversation-row ${
-                  conversation.conversation_id === props.selectedConversationId
-                    ? "selected"
-                    : ""
-                }`}
-                onClick={() => props.onSelect(conversation.conversation_id)}
-              >
-                <span className={`mini-avatar ${conversation.kind === "group" ? "group" : ""}`}>
-                  {conversation.kind === "group" ? "群" : initials(title)}
-                </span>
-                <span className="conversation-copy">
-                  <span className="conversation-topline">
-                    <strong>{title}</strong>
-                    <time>{relativeTime(conversation.last_message_at, props.locale)}</time>
-                  </span>
-                  <span className="conversation-preview">
-                    {conversation.last_message?.body ?? subtitle ?? props.t.noMessagesYet}
-                  </span>
-                </span>
-                {conversation.unread_count > 0 && (
-                  <span className="unread-badge">
-                    {conversation.unread_count > 99 ? "99+" : conversation.unread_count}
-                  </span>
-                )}
-              </button>
-            );
-          })
-        )}
-      </div>
-    </div>
-  );
-}
-
-function ContactsView(props: {
-  contacts: Account[];
-  lookupQuery: string;
-  lookupResult: Account | null;
-  requestMessage: string;
-  busy: boolean;
-  t: Translation;
-  onLookupQuery(value: string): void;
-  onLookup(): void;
-  onRequestMessage(value: string): void;
-  onSendRequest(): void;
-  onChat(accountId: string): void;
-}) {
-  return (
-    <div className="view-stack">
-      <section className="add-friend-card">
-        <div className="view-toolbar"><strong>{props.t.addFriend}</strong></div>
-        <form
-          className="exact-search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            props.onLookup();
-          }}
-        >
-          <input
-            value={props.lookupQuery}
-            onChange={(event) => props.onLookupQuery(event.target.value)}
-            placeholder={props.t.searchById}
-          />
-          <button className="small-primary" disabled={props.busy || !props.lookupQuery.trim()}>
-            {props.t.search}
-          </button>
-        </form>
-        <small className="hint-text">{props.t.exactSearchOnly}</small>
-        {props.lookupResult && (
-          <div className="lookup-card">
-            <div className="person-line">
-              <span className="mini-avatar">{initials(props.lookupResult.display_name)}</span>
-              <span>
-                <strong>{props.lookupResult.display_name}</strong>
-                <small>{props.lookupResult.chat_id}</small>
-              </span>
-            </div>
-            <label>
-              {props.t.requestMessage}
-              <textarea
-                value={props.requestMessage}
-                onChange={(event) => props.onRequestMessage(event.target.value)}
-                maxLength={240}
-                rows={3}
-              />
-            </label>
-            <button
-              className="primary-button"
-              disabled={props.busy || !props.requestMessage.trim()}
-              onClick={props.onSendRequest}
-            >
-              {props.t.sendRequest}
-            </button>
-          </div>
-        )}
-      </section>
-
-      <div className="view-toolbar"><strong>{props.t.contacts}</strong><span>{props.contacts.length}</span></div>
-      <div className="contact-list">
-        {props.contacts.length === 0 ? (
-          <p className="empty-sidebar">{props.t.noContacts}</p>
-        ) : (
-          props.contacts.map((account) => (
-            <div className="contact-row" key={account.account_id}>
-              <span className="mini-avatar">{initials(account.display_name)}</span>
-              <span className="contact-copy">
-                <strong>{account.display_name}</strong>
-                <small>{account.chat_id}</small>
-              </span>
-              <button className="small-primary" onClick={() => props.onChat(account.account_id)}>
-                {props.t.startChat}
-              </button>
-            </div>
-          ))
-        )}
-      </div>
-    </div>
-  );
-}
-
-function RequestsView(props: {
-  mailbox: FriendRequestMailbox;
-  busy: boolean;
-  t: Translation;
-  onRespond(requestId: string, response: "accept" | "reject"): void;
-}) {
-  const incoming = props.mailbox.incoming.filter((request) => request.status === "pending");
-  return (
-    <div className="view-stack requests-view">
-      <div className="view-toolbar"><strong>{props.t.incomingRequests}</strong><span>{incoming.length}</span></div>
-      {incoming.length === 0 ? (
-        <p className="empty-sidebar">{props.t.noRequests}</p>
-      ) : (
-        incoming.map((request) => (
-          <div className="request-card" key={request.request_id}>
-            <div className="person-line">
-              <span className="mini-avatar">{initials(request.peer.display_name)}</span>
-              <span><strong>{request.peer.display_name}</strong><small>{request.peer.chat_id}</small></span>
-            </div>
-            <p>{request.message}</p>
-            <div className="request-actions">
-              <button className="secondary-button" disabled={props.busy} onClick={() => props.onRespond(request.request_id, "reject")}>{props.t.reject}</button>
-              <button className="primary-button" disabled={props.busy} onClick={() => props.onRespond(request.request_id, "accept")}>{props.t.accept}</button>
-            </div>
-          </div>
-        ))
-      )}
-      <div className="view-toolbar"><strong>{props.t.outgoingRequests}</strong><span>{props.mailbox.outgoing.length}</span></div>
-      {props.mailbox.outgoing.map((request) => (
-        <div className="request-card compact" key={request.request_id}>
-          <div className="person-line">
-            <span className="mini-avatar">{initials(request.peer.display_name)}</span>
-            <span><strong>{request.peer.display_name}</strong><small>{request.peer.chat_id}</small></span>
-          </div>
-          <p>{request.message}</p>
-          <small className={`request-status ${request.status}`}>{statusLabel(request.status, props.t)}</small>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function GroupManagement(props: {
-  details: GroupDetails;
-  contacts: Account[];
-  accountById: Map<string, Account>;
-  activeAccountId: string;
-  busy: boolean;
-  t: Translation;
-  onClose(): void;
-  onAdd(accountId: string): void;
-  onRemove(accountId: string): void;
-  onRole(accountId: string, role: Exclude<GroupRole, "owner">): void;
-  onDissolve(): void;
-}) {
-  const memberIds = new Set(props.details.members.map((member) => member.account_id));
-  const availableContacts = props.contacts.filter((contact) => !memberIds.has(contact.account_id));
-  const canRemove = props.details.actor_role === "owner" || props.details.actor_role === "admin";
-  return (
-    <Modal title={props.t.groupSettings} onClose={props.onClose} t={props.t} wide>
-      <div className="group-summary">
-        <div className="avatar large group">群</div>
-        <div><h3>{props.details.name}</h3><p>{props.t.groupCode}: {props.details.group_code}</p></div>
-      </div>
-      <p className="permission-note">
-        {props.details.actor_role === "owner"
-          ? props.t.ownerPermissions
-          : props.details.actor_role === "admin"
-            ? props.t.adminPermissions
-            : props.t.memberPermissions}
-      </p>
-      <div className="modal-section-title">{props.t.addMember}</div>
-      {availableContacts.length === 0 ? (
-        <p className="empty-small">{props.t.noContacts}</p>
-      ) : (
-        <div className="add-member-grid">
-          {availableContacts.map((contact) => (
-            <button key={contact.account_id} disabled={props.busy} onClick={() => props.onAdd(contact.account_id)}>
-              <span className="mini-avatar">{initials(contact.display_name)}</span>
-              <span><strong>{contact.display_name}</strong><small>{contact.chat_id}</small></span>
-              <b>＋</b>
-            </button>
-          ))}
-        </div>
-      )}
-      <div className="modal-section-title">{props.t.members} · {props.details.members.length}</div>
-      <div className="member-list">
-        {props.details.members.map((member) => {
-          const account = props.accountById.get(member.account_id);
-          const isSelf = member.account_id === props.activeAccountId;
-          const canRemoveTarget =
-            canRemove &&
-            member.role !== "owner" &&
-            !isSelf &&
-            !(props.details.actor_role === "admin" && member.role === "admin");
-          return (
-            <div className="member-row" key={member.account_id}>
-              <span className="mini-avatar">{initials(account?.display_name ?? member.account_id)}</span>
-              <span className="contact-copy"><strong>{account?.display_name ?? shortUuid(member.account_id)}</strong><small>{account?.chat_id ?? shortUuid(member.account_id)}</small></span>
-              <span className={`role-chip ${member.role}`}>{roleLabel(member.role, props.t)}</span>
-              {props.details.actor_role === "owner" && member.role !== "owner" && (
-                <button className="text-button" disabled={props.busy} onClick={() => props.onRole(member.account_id, member.role === "admin" ? "member" : "admin")}>
-                  {member.role === "admin" ? props.t.removeAdmin : props.t.setAdmin}
-                </button>
-              )}
-              {canRemoveTarget && (
-                <button className="danger-text-button" disabled={props.busy} onClick={() => props.onRemove(member.account_id)}>{props.t.remove}</button>
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {props.details.actor_role === "owner" && (
-        <button className="danger-button" disabled={props.busy} onClick={props.onDissolve}>{props.t.dissolveGroup}</button>
-      )}
-    </Modal>
   );
 }
 
@@ -1360,21 +1928,74 @@ function Modal(props: {
 }) {
   return (
     <div className="modal-overlay" role="presentation" onMouseDown={props.onClose}>
-      <section className={`modal-card ${props.wide ? "wide" : ""}`} role="dialog" aria-modal="true" onMouseDown={(event) => event.stopPropagation()}>
-        <header className="modal-header"><h2>{props.title}</h2><button className="icon-button" onClick={props.onClose} title={props.t.close}>×</button></header>
+      <section
+        className={`modal-card ${props.wide ? "wide" : ""}`}
+        role="dialog"
+        aria-modal="true"
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <header className="modal-header">
+          <h2>{props.title}</h2>
+          <button type="button" onClick={props.onClose} title={props.t.close}>×</button>
+        </header>
         <div className="modal-body">{props.children}</div>
       </section>
     </div>
   );
 }
 
+function Avatar({
+  label,
+  group = false,
+  small = false,
+  large = false,
+}: {
+  label: string;
+  group?: boolean;
+  small?: boolean;
+  large?: boolean;
+}) {
+  return (
+    <span
+      className={`ui-avatar ${group ? "group" : ""} ${small ? "small" : ""} ${large ? "large" : ""}`}
+    >
+      {group ? <GroupIcon /> : initials(label)}
+    </span>
+  );
+}
+
 function LoadingScreen({ t, onOpenSettings }: { t: Translation; onOpenSettings(): void }) {
   return (
-    <main className="onboarding-shell">
-      <button className="onboarding-settings-button" type="button" onClick={onOpenSettings}><SettingsIcon /><span>{t.settings}</span></button>
-      <section className="onboarding-card loading-card"><p className="eyebrow">{t.appName}</p><h1>{t.restoringSession}</h1></section>
+    <main className="auth-shell">
+      <button className="auth-settings" type="button" onClick={onOpenSettings}>
+        <SettingsIcon />
+        <span>{t.settings}</span>
+      </button>
+      <section className="auth-card loading-card">
+        <div className="auth-logo"><ChatIcon /></div>
+        <h1>{t.restoringSession}</h1>
+      </section>
     </main>
   );
+}
+
+async function loadGroupWithAccounts(
+  token: string,
+  groupId: string,
+  accountById: Map<string, Account>,
+  mergeKnownAccounts: (accounts: Account[]) => void,
+) {
+  const details = await getGroup(token, groupId);
+  const missing = details.members
+    .map((member) => member.account_id)
+    .filter((accountId) => !accountById.has(accountId));
+  if (missing.length > 0) {
+    const loaded = await Promise.all(
+      missing.map((accountId) => getAccount(token, accountId)),
+    );
+    mergeKnownAccounts(loaded);
+  }
+  return details;
 }
 
 async function handleServerEvent(
@@ -1440,6 +2061,16 @@ function readableError(reason: unknown): string {
   return String(reason);
 }
 
+function conversationTitle(
+  conversation: Conversation,
+  peer: Account | undefined,
+  t: Translation,
+) {
+  return conversation.kind === "group"
+    ? conversation.group_name ?? t.group
+    : peer?.display_name ?? t.unknownUser;
+}
+
 function initials(value: string): string {
   return (
     value
@@ -1455,40 +2086,37 @@ function shortUuid(value: string): string {
   return value.length > 12 ? `${value.slice(0, 8)}…${value.slice(-4)}` : value;
 }
 
-function socketStatusLabel(status: SocketStatus, t: Translation): string {
-  if (status === "online") return t.realtimeConnected;
-  if (status === "connecting") return t.realtimeConnecting;
-  return t.realtimeOffline;
-}
-
-function relativeTime(value: string | null, locale: Locale): string {
-  if (!value) return "";
-  const timestamp = new Date(value).getTime();
-  if (!Number.isFinite(timestamp)) return "";
-  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return locale === "zh-CN" ? "刚刚" : "now";
-  if (seconds < 3600) {
-    const minutes = Math.floor(seconds / 60);
-    return locale === "zh-CN" ? `${minutes}分钟` : `${minutes}m`;
-  }
-  if (seconds < 86_400) {
-    const hours = Math.floor(seconds / 3600);
-    return locale === "zh-CN" ? `${hours}小时` : `${hours}h`;
-  }
-  return new Date(value).toLocaleDateString(locale, { month: "short", day: "numeric" });
-}
-
 function formatClock(value: string): string {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toLocaleTimeString(document.documentElement.lang || undefined, {
+  return new Intl.DateTimeFormat(undefined, {
     hour: "2-digit",
     minute: "2-digit",
-  });
+  }).format(new Date(value));
+}
+
+function formatListTime(value: string | null, locale: Locale): string {
+  if (!value) return "";
+  return new Intl.DateTimeFormat(locale, {
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function formatTemplate(template: string, value: string): string {
   return template.replace("{0}", value);
+}
+
+function totalUnread(conversations: Conversation[]) {
+  return conversations.reduce((sum, conversation) => sum + conversation.unread_count, 0);
+}
+
+function boundedCount(value: number) {
+  return value > 99 ? "99+" : String(value);
+}
+
+function socketStatusLabel(status: SocketStatus, t: Translation): string {
+  if (status === "online") return t.realtimeConnected;
+  if (status === "connecting") return t.realtimeConnecting;
+  return t.realtimeOffline;
 }
 
 function statusLabel(status: string, t: Translation): string {

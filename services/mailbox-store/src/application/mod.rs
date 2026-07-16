@@ -6,6 +6,7 @@ use uuid::Uuid;
 const MAX_MESSAGE_CHARS: usize = 10_000;
 const MAX_GROUP_NAME_CHARS: usize = 64;
 const MAX_INITIAL_GROUP_MEMBERS: usize = 100;
+const MAX_GROUP_JOIN_MESSAGE_CHARS: usize = 256;
 
 pub(crate) fn canonical_pair(left: Uuid, right: Uuid) -> Result<(Uuid, Uuid), ApiError> {
     if left == right {
@@ -49,6 +50,29 @@ pub(crate) fn validate_group_name(name: &str) -> Result<String, ApiError> {
         ));
     }
     Ok(name.to_owned())
+}
+
+pub(crate) fn validate_group_lookup_identifier(identifier: &str) -> Result<String, ApiError> {
+    let identifier = identifier.trim();
+    if identifier.is_empty() || identifier.len() > 64 {
+        return Err(ApiError::bad_request(
+            "invalid_group_identifier",
+            "group identifier must be a group code or UUID",
+        ));
+    }
+    Ok(identifier.to_ascii_uppercase())
+}
+
+pub(crate) fn validate_group_join_message(message: &str) -> Result<String, ApiError> {
+    let message = message.trim();
+    let length = message.chars().count();
+    if length == 0 || length > MAX_GROUP_JOIN_MESSAGE_CHARS {
+        return Err(ApiError::bad_request(
+            "invalid_group_join_message",
+            format!("group join message must contain 1-{MAX_GROUP_JOIN_MESSAGE_CHARS} characters"),
+        ));
+    }
+    Ok(message.to_owned())
 }
 
 pub(crate) fn validate_initial_group_members(members: &[Uuid]) -> Result<(), ApiError> {
