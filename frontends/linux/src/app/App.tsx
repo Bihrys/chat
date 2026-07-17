@@ -9,7 +9,6 @@ import {
   type ReactNode,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ApiError,
   addGroupMember,
@@ -1744,11 +1743,16 @@ export function App() {
 }
 
 function DesktopWindowControls({ locale }: { locale: Locale }) {
-  const appWindow = getCurrentWindow();
   const labels =
     locale === "zh-CN"
       ? { minimize: "最小化", maximize: "最大化或还原", close: "关闭" }
       : { minimize: "Minimize", maximize: "Maximize or restore", close: "Close" };
+
+  const runWindowAction = (action: "minimize" | "toggle_maximize" | "close") => {
+    void invoke("window_action", { action }).catch((reason) => {
+      console.error(`window action ${action} failed`, reason);
+    });
+  };
 
   return (
     <div className="desktop-window-controls" aria-label="window controls">
@@ -1756,7 +1760,7 @@ function DesktopWindowControls({ locale }: { locale: Locale }) {
         type="button"
         title={labels.minimize}
         aria-label={labels.minimize}
-        onClick={() => void appWindow.minimize()}
+        onClick={() => runWindowAction("minimize")}
       >
         <span aria-hidden="true">−</span>
       </button>
@@ -1764,7 +1768,7 @@ function DesktopWindowControls({ locale }: { locale: Locale }) {
         type="button"
         title={labels.maximize}
         aria-label={labels.maximize}
-        onClick={() => void appWindow.toggleMaximize()}
+        onClick={() => runWindowAction("toggle_maximize")}
       >
         <span className="maximize-glyph" aria-hidden="true" />
       </button>
@@ -1773,7 +1777,7 @@ function DesktopWindowControls({ locale }: { locale: Locale }) {
         type="button"
         title={labels.close}
         aria-label={labels.close}
-        onClick={() => void appWindow.close()}
+        onClick={() => runWindowAction("close")}
       >
         <span aria-hidden="true">×</span>
       </button>

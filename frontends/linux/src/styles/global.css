@@ -2581,7 +2581,14 @@ body.composer-resizing .composer-resize-handle::after {
 
 /* Frameless Tauri window, transient notices, and compact contact popover. */
 .tauri-frameless .conversation-header {
-  padding-right: 132px;
+  position: relative;
+  align-items: flex-end;
+  padding: 26px 14px 8px clamp(12px, 2.5vw, 20px);
+}
+
+.tauri-frameless .conversation-header-actions {
+  align-self: flex-end;
+  margin-left: auto;
 }
 
 .desktop-window-controls {
@@ -2589,14 +2596,14 @@ body.composer-resizing .composer-resize-handle::after {
   z-index: 70;
   top: 0;
   right: 0;
-  height: 38px;
+  height: 30px;
   display: flex;
   align-items: stretch;
 }
 
 .desktop-window-controls button {
-  width: 42px;
-  height: 38px;
+  width: 46px;
+  height: 30px;
   display: grid;
   place-items: center;
   padding: 0;
@@ -2604,7 +2611,7 @@ body.composer-resizing .composer-resize-handle::after {
   border-radius: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: 20px;
+  font-size: 18px;
   line-height: 1;
   cursor: pointer;
 }
@@ -2629,7 +2636,7 @@ body.composer-resizing .composer-resize-handle::after {
   position: absolute;
   z-index: 40;
   top: 0;
-  right: 126px;
+  right: 138px;
   left: 0;
   height: 30px;
 }
@@ -2681,7 +2688,7 @@ body.composer-resizing .composer-resize-handle::after {
   }
 
   .tauri-frameless .conversation-header {
-    padding-right: 126px;
+    padding: 26px 10px 8px 12px;
   }
 }
 

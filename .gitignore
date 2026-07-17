@@ -113,3 +113,20 @@ Thumbs.db
 var/bin/**
 !var/bin/
 !var/bin/.gitkeep
+
+# ============================================================
+# Generated reports / local developer artifacts
+# ============================================================
+
+/tree.txt
+/tree1.txt
+.pnpm-store/
+coverage/
+*.tsbuildinfo
+.eslintcache
+*.log
+
+# Locally produced hotfix bundles should not be committed.
+/*.patch
+/*-fixed-source.zip
+/*-package.zip

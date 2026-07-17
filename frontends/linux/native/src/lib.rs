@@ -9,6 +9,18 @@ fn backend_status() -> &'static str {
 }
 
 #[tauri::command]
+fn window_action(window: tauri::WebviewWindow, action: &str) -> Result<(), String> {
+    let result = match action {
+        "minimize" => window.minimize(),
+        "toggle_maximize" => window.toggle_maximize(),
+        "close" => window.close(),
+        _ => return Err(format!("unsupported window action: {action}")),
+    };
+
+    result.map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 fn configure_main_window(
     window: tauri::WebviewWindow,
 ) -> Result<WindowChromeState, String> {
@@ -30,7 +42,8 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             backend_status,
-            configure_main_window
+            configure_main_window,
+            window_action
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Tauri application");
