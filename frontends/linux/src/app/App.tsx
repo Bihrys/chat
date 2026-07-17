@@ -5,6 +5,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
 import { invoke } from "@tauri-apps/api/core";
@@ -82,7 +83,8 @@ import { ContactProfile } from "./ContactProfile";
 import { UserAvatar as Avatar } from "./UserAvatar";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
-const MAX_COMPOSER_HEIGHT = 132;
+const COMPOSER_MIN_HEIGHT = 120;
+const COMPOSER_DEFAULT_HEIGHT = 168;
 const EMPTY_REQUESTS: FriendRequestMailbox = { incoming: [], outgoing: [] };
 
 type PrimaryView = "chats" | "contacts";
@@ -112,7 +114,14 @@ export function App() {
   const selectedConversationRef = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const messageScrollRef = useRef<HTMLDivElement | null>(null);
-  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  const conversationPaneRef = useRef<HTMLElement | null>(null);
+  const composerResizeRef = useRef<{
+    pointerId: number;
+    startY: number;
+    startHeight: number;
+    maxHeight: number;
+  } | null>(null);
+  const [composerHeight, setComposerHeight] = useState(COMPOSER_DEFAULT_HEIGHT);
   const [socketStatus, setSocketStatus] = useState<SocketStatus>("offline");
   const [primaryView, setPrimaryView] = useState<PrimaryView>("chats");
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
@@ -459,19 +468,63 @@ export function App() {
     };
   }, [accessToken, accountById, mergeKnownAccounts, reportError, selectedConversation]);
 
-  useLayoutEffect(() => {
-    const composer = composerRef.current;
-    if (!composer) return;
-    composer.style.height = "auto";
-    composer.style.height = `${Math.min(composer.scrollHeight, MAX_COMPOSER_HEIGHT)}px`;
-    composer.style.overflowY =
-      composer.scrollHeight > MAX_COMPOSER_HEIGHT ? "auto" : "hidden";
-  }, [draft]);
+  useEffect(() => {
+    const pane = conversationPaneRef.current;
+    if (!pane) return;
+
+    const observer = new ResizeObserver(() => {
+      setComposerHeight((current) =>
+        clampComposerHeight(current, pane.clientHeight),
+      );
+    });
+    observer.observe(pane);
+    return () => observer.disconnect();
+  }, [activeAccount?.account_id]);
 
   useLayoutEffect(() => {
     const scroller = messageScrollRef.current;
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
-  }, [messages, selectedConversationId]);
+  }, [composerHeight, messages, selectedConversationId]);
+
+  function beginComposerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    const paneHeight = conversationPaneRef.current?.clientHeight ?? window.innerHeight;
+    composerResizeRef.current = {
+      pointerId: event.pointerId,
+      startY: event.clientY,
+      startHeight: composerHeight,
+      maxHeight: composerMaximumHeight(paneHeight),
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("composer-resizing");
+    event.preventDefault();
+  }
+
+  function moveComposerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = composerResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    const next = resize.startHeight + resize.startY - event.clientY;
+    setComposerHeight(
+      Math.min(resize.maxHeight, Math.max(COMPOSER_MIN_HEIGHT, next)),
+    );
+  }
+
+  function endComposerResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = composerResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    composerResizeRef.current = null;
+    document.body.classList.remove("composer-resizing");
+  }
+
+  function resizeComposerBy(delta: number) {
+    const paneHeight = conversationPaneRef.current?.clientHeight ?? window.innerHeight;
+    setComposerHeight((current) =>
+      clampComposerHeight(current + delta, paneHeight),
+    );
+  }
 
   async function openDirectConversation(peerAccountId: string) {
     if (!accessToken) return;
@@ -1019,7 +1072,7 @@ export function App() {
         )}
       </aside>
 
-      <section className="conversation-pane">
+      <section className="conversation-pane" ref={conversationPaneRef}>
         {primaryView === "contacts" && selectedContact ? (
           <ContactProfile
             account={selectedContact}
@@ -1124,13 +1177,35 @@ export function App() {
 
             <form
               className="composer"
+              style={{ height: `${composerHeight}px` }}
               onSubmit={(event) => {
                 event.preventDefault();
                 void submitMessage();
               }}
             >
+              <div
+                className="composer-resize-handle"
+                role="separator"
+                aria-orientation="horizontal"
+                aria-label={
+                  locale === "zh-CN" ? "调整消息输入区高度" : "Resize message input"
+                }
+                tabIndex={0}
+                onPointerDown={beginComposerResize}
+                onPointerMove={moveComposerResize}
+                onPointerUp={endComposerResize}
+                onPointerCancel={endComposerResize}
+                onKeyDown={(event) => {
+                  if (event.key === "ArrowUp") {
+                    event.preventDefault();
+                    resizeComposerBy(16);
+                  } else if (event.key === "ArrowDown") {
+                    event.preventDefault();
+                    resizeComposerBy(-16);
+                  }
+                }}
+              />
               <textarea
-                ref={composerRef}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -2176,6 +2251,22 @@ async function handleServerEvent(
     return;
   }
   await refreshConversations(accessToken);
+}
+
+function composerMaximumHeight(paneHeight: number) {
+  const proportionalLimit = Math.floor(paneHeight * 0.62);
+  const messageSpaceLimit = paneHeight - 150;
+  return Math.max(
+    COMPOSER_MIN_HEIGHT,
+    Math.min(proportionalLimit, messageSpaceLimit),
+  );
+}
+
+function clampComposerHeight(height: number, paneHeight: number) {
+  return Math.min(
+    composerMaximumHeight(paneHeight),
+    Math.max(COMPOSER_MIN_HEIGHT, height),
+  );
 }
 
 function readStoredSession(): AuthSession | null {

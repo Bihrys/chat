@@ -85,6 +85,11 @@ body {
   font-size: 14px;
 }
 
+body.composer-resizing {
+  cursor: row-resize;
+  user-select: none;
+}
+
 button,
 input,
 textarea,
@@ -602,14 +607,14 @@ svg {
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 20px clamp(10px, 4vw, 56px);
+  padding: 20px clamp(14px, 1.4vw, 22px);
   background: var(--panel);
 }
 
 .message-stack {
-  width: min(920px, 100%);
+  width: 100%;
   min-height: 100%;
-  margin: 0 auto;
+  margin: 0;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -673,27 +678,61 @@ svg {
 }
 
 .composer {
+  position: relative;
   min-width: 0;
+  min-height: 120px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-rows: auto;
+  grid-template-rows: minmax(0, 1fr) auto;
   align-items: end;
-  gap: 12px;
-  min-height: 112px;
-  padding: 14px clamp(10px, 2.5vw, 18px) 16px;
+  gap: 10px 12px;
+  padding: 16px clamp(12px, 2vw, 18px) 16px;
   border-top: 1px solid var(--border-soft);
   background: var(--panel);
 }
 
+.composer-resize-handle {
+  position: absolute;
+  z-index: 6;
+  top: -5px;
+  left: 0;
+  right: 0;
+  height: 10px;
+  border: 0;
+  outline: 0;
+  cursor: row-resize;
+  touch-action: none;
+}
+
+.composer-resize-handle::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 4px;
+  height: 1px;
+  background: transparent;
+  transition: background 120ms ease, height 120ms ease;
+}
+
+.composer-resize-handle:hover::after,
+.composer-resize-handle:focus-visible::after,
+body.composer-resizing .composer-resize-handle::after {
+  height: 2px;
+  background: color-mix(in srgb, var(--accent) 72%, var(--border-soft));
+}
+
 .composer textarea {
+  grid-column: 1 / -1;
+  grid-row: 1;
   width: 100%;
-  min-height: 64px;
-  max-height: 132px;
+  height: 100%;
+  min-height: 0;
   padding: 4px 0;
   border: 0;
   outline: 0;
   resize: none;
-  overflow-y: hidden;
+  overflow-y: auto;
   background: transparent;
   color: var(--text);
   line-height: 1.55;
@@ -727,6 +766,8 @@ svg {
 }
 
 .send-button {
+  grid-column: 2;
+  grid-row: 2;
   min-width: 82px;
 }
 
