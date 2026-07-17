@@ -8,7 +8,8 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, isTauri } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   ApiError,
   addGroupMember,
@@ -109,6 +110,7 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const t = translations[locale];
+  const tauriRuntime = isTauri();
 
   const [session, setSession] = useState<AuthSession | null>(readStoredSession);
   const [authChecking, setAuthChecking] = useState(session !== null);
@@ -234,6 +236,12 @@ export function App() {
     storeLocale(locale);
     storeTheme(theme);
   }, [locale, theme]);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timeout = window.setTimeout(() => setNotice(null), 2_800);
+    return () => window.clearTimeout(timeout);
+  }, [notice]);
 
   const saveSession = useCallback((next: AuthSession) => {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
@@ -1217,7 +1225,7 @@ export function App() {
   ).length;
 
   return (
-    <main className="wechat-shell">
+    <main className={`wechat-shell ${tauriRuntime ? "tauri-frameless" : ""}`}>
       <aside className="app-rail">
         <button
           className="rail-avatar"
@@ -1346,6 +1354,14 @@ export function App() {
       </aside>
 
       <section className="conversation-pane" ref={conversationPaneRef}>
+        {tauriRuntime && (
+          <>
+            {!selectedConversation && (
+              <div className="frameless-drag-strip" data-tauri-drag-region />
+            )}
+            <DesktopWindowControls locale={locale} />
+          </>
+        )}
         {primaryView === "contacts" && selectedContact ? (
           <ContactProfile
             account={selectedContact}
@@ -1369,7 +1385,7 @@ export function App() {
           />
         ) : selectedConversation ? (
           <>
-            <header className="conversation-header">
+            <header className="conversation-header" data-tauri-drag-region>
               <div className="conversation-title-block">
                 <h1>
                   {selectedConversation.kind === "group"
@@ -1706,6 +1722,44 @@ export function App() {
         />
       )}
     </main>
+  );
+}
+
+function DesktopWindowControls({ locale }: { locale: Locale }) {
+  const appWindow = getCurrentWindow();
+  const labels =
+    locale === "zh-CN"
+      ? { minimize: "最小化", maximize: "最大化或还原", close: "关闭" }
+      : { minimize: "Minimize", maximize: "Maximize or restore", close: "Close" };
+
+  return (
+    <div className="desktop-window-controls" aria-label="window controls">
+      <button
+        type="button"
+        title={labels.minimize}
+        aria-label={labels.minimize}
+        onClick={() => void appWindow.minimize()}
+      >
+        <span aria-hidden="true">−</span>
+      </button>
+      <button
+        type="button"
+        title={labels.maximize}
+        aria-label={labels.maximize}
+        onClick={() => void appWindow.toggleMaximize()}
+      >
+        <span className="maximize-glyph" aria-hidden="true" />
+      </button>
+      <button
+        className="close"
+        type="button"
+        title={labels.close}
+        aria-label={labels.close}
+        onClick={() => void appWindow.close()}
+      >
+        <span aria-hidden="true">×</span>
+      </button>
+    </div>
   );
 }
 

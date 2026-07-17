@@ -2577,3 +2577,116 @@ body.composer-resizing .composer-resize-handle::after {
     width: 100%;
   }
 }
+
+
+/* Frameless Tauri window, transient notices, and compact contact popover. */
+.tauri-frameless .conversation-header {
+  padding-right: 132px;
+}
+
+.desktop-window-controls {
+  position: absolute;
+  z-index: 70;
+  top: 0;
+  right: 0;
+  height: 38px;
+  display: flex;
+  align-items: stretch;
+}
+
+.desktop-window-controls button {
+  width: 42px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.desktop-window-controls button:hover {
+  background: var(--list-hover);
+  color: var(--text);
+}
+
+.desktop-window-controls button.close:hover {
+  background: #c42b1c;
+  color: #fff;
+}
+
+.maximize-glyph {
+  width: 11px;
+  height: 11px;
+  border: 1px solid currentColor;
+}
+
+.frameless-drag-strip {
+  position: absolute;
+  z-index: 40;
+  top: 0;
+  right: 126px;
+  left: 0;
+  height: 30px;
+}
+
+.notice-banner {
+  animation:
+    notice-pop-in 160ms ease-out,
+    notice-fade-out 220ms ease-in 2.5s forwards;
+}
+
+@keyframes notice-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes notice-fade-out {
+  to {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+
+.contact-popover-anchor {
+  max-width: calc(100vw - 96px);
+}
+
+.contact-profile-card.compact {
+  width: min(320px, calc(100vw - 96px));
+  max-height: calc(100vh - 32px);
+}
+
+@media (max-width: 720px) {
+  .contact-popover-anchor {
+    left: 76px;
+    right: auto;
+    bottom: 12px;
+    max-width: calc(100vw - 88px);
+  }
+
+  .contact-profile-card.compact {
+    width: min(320px, calc(100vw - 88px));
+    max-height: calc(100vh - 24px);
+  }
+
+  .tauri-frameless .conversation-header {
+    padding-right: 126px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-banner {
+    animation: none;
+  }
+}
