@@ -10,14 +10,23 @@ fn backend_status() -> &'static str {
 
 #[tauri::command]
 fn window_action(window: tauri::WebviewWindow, action: &str) -> Result<(), String> {
-    let result = match action {
-        "minimize" => window.minimize(),
-        "toggle_maximize" => window.toggle_maximize(),
-        "close" => window.close(),
-        _ => return Err(format!("unsupported window action: {action}")),
-    };
+    match action {
+        "minimize" => window.minimize().map_err(|error| error.to_string()),
+        "toggle_maximize" => {
+            let is_maximized = window
+                .is_maximized()
+                .map_err(|error| error.to_string())?;
 
-    result.map_err(|error| error.to_string())
+            if is_maximized {
+                window.unmaximize()
+            } else {
+                window.maximize()
+            }
+            .map_err(|error| error.to_string())
+        }
+        "close" => window.close().map_err(|error| error.to_string()),
+        _ => Err(format!("unsupported window action: {action}")),
+    }
 }
 
 #[tauri::command]
