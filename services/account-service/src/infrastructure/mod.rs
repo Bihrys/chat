@@ -4,7 +4,9 @@ use anyhow::{Context, Result, anyhow};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::domain::{Account, FriendRequestMailbox, FriendRequestRecord, FriendRequestStatus, UiPreferences};
+use crate::domain::{
+    Account, FriendRequestMailbox, FriendRequestRecord, FriendRequestStatus, UiPreferences,
+};
 
 const ACCOUNT_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0001_basic_accounts.sql");
@@ -16,9 +18,8 @@ const PROFILE_CONTACT_MIGRATION: &str = include_str!(
 const CONTACT_CONTROLS_MIGRATION: &str = include_str!(
     "../../../../infra/native/postgresql/migrations/identity/0004_contact_controls.sql"
 );
-const UI_PREFERENCES_MIGRATION: &str = include_str!(
-    "../../../../infra/native/postgresql/migrations/identity/0005_ui_preferences.sql"
-);
+const UI_PREFERENCES_MIGRATION: &str =
+    include_str!("../../../../infra/native/postgresql/migrations/identity/0005_ui_preferences.sql");
 
 #[derive(Clone)]
 pub(crate) struct AccountRepository {

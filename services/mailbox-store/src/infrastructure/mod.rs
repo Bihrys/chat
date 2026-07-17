@@ -23,9 +23,8 @@ const GROUP_DISCOVERY_MIGRATION: &str =
 const CONVERSATION_PREFERENCES_MIGRATION: &str = include_str!(
     "../../../../infra/native/postgresql/migrations/mailbox/0004_conversation_preferences.sql"
 );
-const MEDIA_CALLS_MIGRATION: &str = include_str!(
-    "../../../../infra/native/postgresql/migrations/mailbox/0005_media_calls.sql"
-);
+const MEDIA_CALLS_MIGRATION: &str =
+    include_str!("../../../../infra/native/postgresql/migrations/mailbox/0005_media_calls.sql");
 
 #[derive(Clone)]
 pub(crate) struct MailboxRepository {
@@ -69,9 +68,14 @@ impl MailboxRepository {
             .unwrap_or_else(|| PathBuf::from("var/data/chat-media"));
         tokio::fs::create_dir_all(&media_root)
             .await
-            .with_context(|| format!("failed to create media directory {}", media_root.display()))?;
+            .with_context(|| {
+                format!("failed to create media directory {}", media_root.display())
+            })?;
 
-        Ok(Self { pool, media_root: Arc::new(media_root) })
+        Ok(Self {
+            pool,
+            media_root: Arc::new(media_root),
+        })
     }
 
     pub(crate) async fn healthcheck(&self) -> Result<()> {
@@ -736,7 +740,9 @@ impl MailboxRepository {
 
         tokio::fs::write(&temporary_path, &bytes)
             .await
-            .with_context(|| format!("failed to write media object {}", temporary_path.display()))?;
+            .with_context(|| {
+                format!("failed to write media object {}", temporary_path.display())
+            })?;
         tokio::fs::rename(&temporary_path, &final_path)
             .await
             .with_context(|| format!("failed to finalize media object {}", final_path.display()))?;
@@ -772,7 +778,10 @@ impl MailboxRepository {
         }
     }
 
-    pub(crate) async fn get_media_object(&self, object_id: Uuid) -> Result<Option<MediaObjectRecord>> {
+    pub(crate) async fn get_media_object(
+        &self,
+        object_id: Uuid,
+    ) -> Result<Option<MediaObjectRecord>> {
         let row = sqlx::query(
             r"
             SELECT object_id, conversation_id, owner_account_id, media_kind,

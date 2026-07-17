@@ -19,7 +19,6 @@ pub(crate) struct Account {
     pub(crate) created_at: OffsetDateTime,
 }
 
-
 #[derive(Clone, Debug)]
 pub(crate) struct UiPreferences {
     pub(crate) locale: String,

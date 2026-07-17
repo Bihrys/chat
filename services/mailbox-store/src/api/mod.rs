@@ -31,9 +31,9 @@ use crate::{
         validate_structured_message_body,
     },
     domain::{
-        CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
-        CallSignalWire, GroupMemberRecord, GroupRecord, GroupRole, MediaKind, MediaObjectRecord,
-        MessageRecord, MessageWire, ServerEvent,
+        CallSignalWire, CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord,
+        GroupJoinRequestRecord, GroupMemberRecord, GroupRecord, GroupRole, MediaKind,
+        MediaObjectRecord, MessageRecord, MessageWire, ServerEvent,
     },
     infrastructure::{ContactVerifier, MailboxRepository},
 };
@@ -881,15 +881,19 @@ async fn upload_media(
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
     if body.is_empty() {
-        return Err(ApiError::bad_request("empty_media", "media upload cannot be empty"));
+        return Err(ApiError::bad_request(
+            "empty_media",
+            "media upload cannot be empty",
+        ));
     }
     if body.len() > MAX_MEDIA_BYTES {
-        return Err(ApiError::bad_request("media_too_large", "media upload exceeds 128 MiB"));
+        return Err(ApiError::bad_request(
+            "media_too_large",
+            "media upload exceeds 128 MiB",
+        ));
     }
     let media_kind = parse_media_kind(&query.kind)?;
-    if matches!(media_kind, MediaKind::Image | MediaKind::Sticker)
-        && body.len() > MAX_IMAGE_BYTES
-    {
+    if matches!(media_kind, MediaKind::Image | MediaKind::Sticker) && body.len() > MAX_IMAGE_BYTES {
         return Err(ApiError::bad_request(
             "media_too_large",
             "image and sticker uploads exceed 25 MiB",
@@ -930,7 +934,11 @@ async fn download_media(
         .map_err(internal_error)?
         .ok_or_else(|| ApiError::not_found("media_not_found", "media object does not exist"))?;
     ensure_member(&state, object.conversation_id, actor).await?;
-    let bytes = state.mailbox.read_media_bytes(&object).await.map_err(internal_error)?;
+    let bytes = state
+        .mailbox
+        .read_media_bytes(&object)
+        .await
+        .map_err(internal_error)?;
     let mut response = Response::new(Body::from(bytes));
     *response.status_mut() = StatusCode::OK;
     if let Ok(value) = HeaderValue::from_str(&object.content_type) {
@@ -958,26 +966,44 @@ async fn send_call_signal(
         .direct_peer(request.conversation_id, actor)
         .await
         .map_err(internal_error)?
-        .ok_or_else(|| ApiError::bad_request("direct_call_only", "calls are currently supported only in direct chats"))?;
+        .ok_or_else(|| {
+            ApiError::bad_request(
+                "direct_call_only",
+                "calls are currently supported only in direct chats",
+            )
+        })?;
     if peer != request.to_account_id {
-        return Err(ApiError::forbidden("call target is not the direct-chat peer"));
+        return Err(ApiError::forbidden(
+            "call target is not the direct-chat peer",
+        ));
     }
     ensure_contacts(&state, actor, peer).await?;
     if !matches!(request.media.as_str(), "audio" | "video") {
-        return Err(ApiError::bad_request("invalid_call_media", "call media must be audio or video"));
+        return Err(ApiError::bad_request(
+            "invalid_call_media",
+            "call media must be audio or video",
+        ));
     }
     if !matches!(
         request.signal_type.as_str(),
         "offer" | "answer" | "ice" | "hangup" | "reject" | "busy"
     ) {
-        return Err(ApiError::bad_request("invalid_call_signal", "unsupported call signal type"));
+        return Err(ApiError::bad_request(
+            "invalid_call_signal",
+            "unsupported call signal type",
+        ));
     }
     if serde_json::to_vec(&request.payload)
-        .map_err(|_| ApiError::bad_request("invalid_call_payload", "call payload is not serializable"))?
+        .map_err(|_| {
+            ApiError::bad_request("invalid_call_payload", "call payload is not serializable")
+        })?
         .len()
         > MAX_CALL_SIGNAL_BYTES
     {
-        return Err(ApiError::bad_request("call_payload_too_large", "call signal payload is too large"));
+        return Err(ApiError::bad_request(
+            "call_payload_too_large",
+            "call signal payload is too large",
+        ));
     }
     state
         .events
@@ -1239,14 +1265,20 @@ fn parse_media_kind(value: &str) -> Result<MediaKind, ApiError> {
         "voice" => Ok(MediaKind::Voice),
         "sticker" => Ok(MediaKind::Sticker),
         "file" => Ok(MediaKind::File),
-        _ => Err(ApiError::bad_request("invalid_media_kind", "unsupported media kind")),
+        _ => Err(ApiError::bad_request(
+            "invalid_media_kind",
+            "unsupported media kind",
+        )),
     }
 }
 
 fn sanitize_file_name(value: &str) -> Result<String, ApiError> {
     let value = value.trim();
     if value.is_empty() || value.chars().count() > 180 {
-        return Err(ApiError::bad_request("invalid_file_name", "file name must contain 1-180 characters"));
+        return Err(ApiError::bad_request(
+            "invalid_file_name",
+            "file name must contain 1-180 characters",
+        ));
     }
     let name = value
         .chars()
@@ -1268,18 +1300,21 @@ fn validate_media_content_type(kind: MediaKind, content_type: &str) -> Result<()
     if valid {
         Ok(())
     } else {
-        Err(ApiError::bad_request("invalid_media_type", "content type does not match media kind"))
+        Err(ApiError::bad_request(
+            "invalid_media_type",
+            "content type does not match media kind",
+        ))
     }
 }
 
 fn parse_media_message_metadata(body: &str) -> Result<MediaMessageMetadata, ApiError> {
     let metadata: MediaMessageMetadata = serde_json::from_str(body).map_err(|_| {
-        ApiError::bad_request(
-            "invalid_media_message",
-            "media message metadata is invalid",
-        )
+        ApiError::bad_request("invalid_media_message", "media message metadata is invalid")
     })?;
-    if metadata.duration_ms.is_some_and(|value| !(1..=86_400_000).contains(&value)) {
+    if metadata
+        .duration_ms
+        .is_some_and(|value| !(1..=86_400_000).contains(&value))
+    {
         return Err(ApiError::bad_request(
             "invalid_media_duration",
             "media duration is outside the supported range",

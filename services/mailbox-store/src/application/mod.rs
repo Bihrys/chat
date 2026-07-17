@@ -56,7 +56,10 @@ pub(crate) fn validate_structured_message_body(body: &str) -> Result<String, Api
         ));
     }
     serde_json::from_str::<serde_json::Value>(body).map_err(|_| {
-        ApiError::bad_request("invalid_structured_message", "structured message body must be valid JSON")
+        ApiError::bad_request(
+            "invalid_structured_message",
+            "structured message body must be valid JSON",
+        )
     })?;
     Ok(body.to_owned())
 }

@@ -456,10 +456,16 @@ async fn update_ui_preferences(
 ) -> Result<Json<UiPreferencesResponse>, ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     if !matches!(request.locale.as_str(), "zh-CN" | "en") {
-        return Err(ApiError::bad_request("invalid_locale", "locale must be zh-CN or en"));
+        return Err(ApiError::bad_request(
+            "invalid_locale",
+            "locale must be zh-CN or en",
+        ));
     }
     if !matches!(request.theme.as_str(), "dark" | "light") {
-        return Err(ApiError::bad_request("invalid_theme", "theme must be dark or light"));
+        return Err(ApiError::bad_request(
+            "invalid_theme",
+            "theme must be dark or light",
+        ));
     }
     if !(0..=8).contains(&request.font_size_level) {
         return Err(ApiError::bad_request(
