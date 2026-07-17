@@ -6,6 +6,10 @@ export interface Account {
   avatar_data_url?: string | null;
   remark_name?: string | null;
   source?: string | null;
+  tags?: string | null;
+  friend_permission?: "all" | "chat_only";
+  is_starred?: boolean;
+  is_blocked?: boolean;
   created_at: string;
 }
 
@@ -56,6 +60,8 @@ export interface Conversation {
   created_at: string;
   last_message_at: string | null;
   unread_count: number;
+  is_pinned: boolean;
+  is_muted: boolean;
   last_message: ChatMessage | null;
 }
 

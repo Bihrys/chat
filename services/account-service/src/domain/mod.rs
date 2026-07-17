@@ -12,6 +12,10 @@ pub(crate) struct Account {
     pub(crate) avatar_data_url: Option<String>,
     pub(crate) remark_name: Option<String>,
     pub(crate) source: Option<String>,
+    pub(crate) tags: Option<String>,
+    pub(crate) friend_permission: i16,
+    pub(crate) is_starred: bool,
+    pub(crate) is_blocked: bool,
     pub(crate) created_at: OffsetDateTime,
 }
 

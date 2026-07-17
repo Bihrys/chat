@@ -70,6 +70,8 @@ pub(crate) struct ConversationRecord {
     pub(crate) created_at: OffsetDateTime,
     pub(crate) last_message_at: Option<OffsetDateTime>,
     pub(crate) unread_count: i64,
+    pub(crate) is_pinned: bool,
+    pub(crate) is_muted: bool,
     pub(crate) last_message: Option<MessageRecord>,
 }
 

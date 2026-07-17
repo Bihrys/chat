@@ -14,6 +14,8 @@ import {
   addGroupMember,
   createDirectConversation,
   createGroup,
+  clearConversationHistory,
+  deleteContact,
   dissolveGroup,
   getAccount,
   getContact,
@@ -35,11 +37,17 @@ import {
   requestToJoinGroup,
   respondFriendRequest,
   respondGroupJoinRequest,
+  searchMessages,
   sendFriendRequest,
   sendMessage,
   setGroupMemberRole,
   updateAvatar,
+  updateContactBlocked,
+  updateContactPermission,
   updateContactRemark,
+  updateContactStarred,
+  updateContactTags,
+  updateConversationPreferences,
 } from "../lib/api";
 import type {
   Account,
@@ -79,7 +87,8 @@ import {
   SettingsIcon,
 } from "./PreferenceIcons";
 import { SettingsPanel } from "./SettingsPanel";
-import { ContactProfile } from "./ContactProfile";
+import { ContactProfile, ContactProfilePopover } from "./ContactProfile";
+import { DirectChatDetails } from "./DirectChatDetails";
 import { UserAvatar as Avatar } from "./UserAvatar";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
@@ -127,6 +136,11 @@ export function App() {
   const [selectedContactId, setSelectedContactId] = useState<string | null>(null);
   const [selectedContact, setSelectedContact] = useState<Account | null>(null);
   const [commonGroups, setCommonGroups] = useState<CommonGroup[]>([]);
+  const [profilePopoverAccount, setProfilePopoverAccount] = useState<Account | null>(null);
+  const [profilePopoverGroups, setProfilePopoverGroups] = useState<CommonGroup[]>([]);
+  const [directDetailsOpen, setDirectDetailsOpen] = useState(false);
+  const [messageSearch, setMessageSearch] = useState("");
+  const [messageSearchResults, setMessageSearchResults] = useState<ChatMessage[] | null>(null);
   const [chatSearch, setChatSearch] = useState("");
   const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [draft, setDraft] = useState("");
@@ -195,6 +209,10 @@ export function App() {
     selectedConversation?.kind === "direct" && selectedConversation.peer_account_id
       ? accountById.get(selectedConversation.peer_account_id)
       : undefined;
+
+  const visibleMessages = messageSearch.trim()
+    ? messageSearchResults ?? []
+    : messages;
 
   const directConversationByPeer = useMemo(() => {
     const map = new Map<string, Conversation>();
@@ -323,6 +341,14 @@ export function App() {
   }, [selectedConversationId]);
 
   useEffect(() => {
+    setDirectDetailsOpen(false);
+    setProfilePopoverAccount(null);
+    setProfilePopoverGroups([]);
+    setMessageSearch("");
+    setMessageSearchResults(null);
+  }, [selectedConversationId, primaryView]);
+
+  useEffect(() => {
     groupDetailsRef.current = groupDetails;
   }, [groupDetails]);
 
@@ -443,6 +469,28 @@ export function App() {
       cancelled = true;
     };
   }, [accessToken, refreshConversations, reportError, selectedConversationId]);
+
+  useEffect(() => {
+    const query = messageSearch.trim();
+    if (!accessToken || !selectedConversationId || !query) {
+      setMessageSearchResults(null);
+      return;
+    }
+    let cancelled = false;
+    const timeout = window.setTimeout(() => {
+      void searchMessages(accessToken, selectedConversationId, query)
+        .then((results) => {
+          if (!cancelled) setMessageSearchResults(results);
+        })
+        .catch((reason) => {
+          if (!cancelled) reportError(reason);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [accessToken, messageSearch, reportError, selectedConversationId]);
 
   useEffect(() => {
     if (
@@ -657,13 +705,28 @@ export function App() {
     response: "accept" | "reject",
   ) {
     if (!accessToken) return;
+    const request = friendRequests.incoming.find((item) => item.request_id === requestId);
     setBusy(true);
     try {
       await respondFriendRequest(accessToken, requestId, response);
-      await refreshSocial(accessToken);
-      if (response === "accept") {
-        await refreshConversations(accessToken);
+      if (response === "accept" && request) {
+        try {
+          const conversation = await createDirectConversation(
+            accessToken,
+            request.peer.account_id,
+          );
+          await sendMessage(
+            accessToken,
+            conversation.conversation_id,
+            t.friendAcceptedWelcome,
+            crypto.randomUUID(),
+          );
+        } catch (reason) {
+          reportError(reason);
+        }
       }
+      await refreshSocial(accessToken);
+      await refreshConversations(accessToken);
     } catch (reason) {
       reportError(reason);
     } finally {
@@ -821,22 +884,232 @@ export function App() {
     window.setTimeout(() => setCopied(null), 1_200);
   }
 
-  async function performContactRemark(value: string) {
-    if (!accessToken || !selectedContactId) return;
+  function applyContactUpdate(updated: Account) {
+    setContacts((current) =>
+      current
+        .map((account) =>
+          account.account_id === updated.account_id ? updated : account,
+        )
+        .sort((left, right) =>
+          Number(Boolean(right.is_starred)) - Number(Boolean(left.is_starred))
+          || contactDisplayName(left).localeCompare(contactDisplayName(right)),
+        ),
+    );
+    setSelectedContact((current) =>
+      current?.account_id === updated.account_id ? updated : current,
+    );
+    setProfilePopoverAccount((current) =>
+      current?.account_id === updated.account_id ? updated : current,
+    );
+    mergeKnownAccounts([updated]);
+  }
+
+  async function runContactUpdate(
+    accountId: string,
+    operation: () => Promise<Account>,
+  ) {
     setBusy(true);
     setError(null);
     try {
-      const updated = await updateContactRemark(accessToken, selectedContactId, value);
-      setSelectedContact(updated);
-      setContacts((current) =>
-        current.map((account) =>
-          account.account_id === updated.account_id ? updated : account,
-        ),
-      );
-      mergeKnownAccounts([updated]);
+      const updated = await operation();
+      applyContactUpdate(updated);
     } catch (reason) {
       reportError(reason);
       throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function performContactRemark(accountId: string, value: string) {
+    if (!accessToken) return;
+    await runContactUpdate(accountId, () =>
+      updateContactRemark(accessToken, accountId, value),
+    );
+  }
+
+  async function performContactTags(accountId: string, value: string) {
+    if (!accessToken) return;
+    await runContactUpdate(accountId, () =>
+      updateContactTags(accessToken, accountId, value),
+    );
+  }
+
+  async function performContactPermission(
+    accountId: string,
+    permission: "all" | "chat_only",
+  ) {
+    if (!accessToken) return;
+    await runContactUpdate(accountId, () =>
+      updateContactPermission(accessToken, accountId, permission),
+    );
+  }
+
+  async function performContactStar(accountId: string) {
+    if (!accessToken) return;
+    const account = contacts.find((item) => item.account_id === accountId)
+      ?? profilePopoverAccount
+      ?? selectedContact;
+    await runContactUpdate(accountId, () =>
+      updateContactStarred(accessToken, accountId, !account?.is_starred),
+    );
+  }
+
+  async function performContactBlock(accountId: string) {
+    if (!accessToken) return;
+    const account = contacts.find((item) => item.account_id === accountId)
+      ?? profilePopoverAccount
+      ?? selectedContact;
+    await runContactUpdate(accountId, () =>
+      updateContactBlocked(accessToken, accountId, !account?.is_blocked),
+    );
+    await refreshConversations(accessToken);
+  }
+
+  async function performDeleteContact(accountId: string) {
+    if (!accessToken) return;
+    setBusy(true);
+    try {
+      await deleteContact(accessToken, accountId);
+      setContacts((current) => current.filter((item) => item.account_id !== accountId));
+      setKnownAccounts((current) => current.filter((item) => item.account_id !== accountId));
+      if (selectedContactId === accountId) {
+        setSelectedContactId(null);
+        setSelectedContact(null);
+      }
+      if (profilePopoverAccount?.account_id === accountId) {
+        setProfilePopoverAccount(null);
+      }
+      const directConversation = conversations.find(
+        (conversation) =>
+          conversation.kind === "direct" && conversation.peer_account_id === accountId,
+      );
+      if (directConversation?.conversation_id === selectedConversationId) {
+        setSelectedConversationId(null);
+        setMessages([]);
+      }
+      await refreshSocial(accessToken);
+      await refreshConversations(accessToken);
+      setNotice(t.contactDeleted);
+    } catch (reason) {
+      reportError(reason);
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function performRecommendContact(
+    contact: Account,
+    recipientAccountId: string,
+  ) {
+    if (!accessToken) return;
+    setBusy(true);
+    try {
+      const conversation = await createDirectConversation(accessToken, recipientAccountId);
+      const body = encodeContactCard(contact);
+      await sendMessage(
+        accessToken,
+        conversation.conversation_id,
+        body,
+        crypto.randomUUID(),
+      );
+      await refreshConversations(accessToken);
+      setNotice(t.contactCardSent);
+    } catch (reason) {
+      reportError(reason);
+      throw reason;
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openRecommendedContact(card: ContactCardPayload) {
+    if (!accessToken) return;
+    const existing = contacts.find((item) => item.account_id === card.account_id);
+    if (existing) {
+      await openContactPopover(existing);
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const account = await getAccount(accessToken, card.account_id);
+      mergeKnownAccounts([account]);
+      setDiscoveryMode("friend");
+      setLookupQuery(account.chat_id);
+      setLookupResult(account);
+      setRequestMessage(
+        formatTemplate(t.defaultRequest, activeAccount?.display_name ?? ""),
+      );
+      setDiscoveryOpen(true);
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function openContactPopover(account: Account) {
+    if (!accessToken) return;
+    setProfilePopoverAccount(account);
+    try {
+      const [fresh, groups] = await Promise.all([
+        getContact(accessToken, account.account_id),
+        listCommonGroups(accessToken, account.account_id),
+      ]);
+      setProfilePopoverAccount(fresh);
+      setProfilePopoverGroups(groups);
+      applyContactUpdate(fresh);
+    } catch (reason) {
+      reportError(reason);
+    }
+  }
+
+  async function performConversationPreference(
+    conversation: Conversation,
+    patch: Partial<{ is_pinned: boolean; is_muted: boolean }>,
+  ) {
+    if (!accessToken) return;
+    setBusy(true);
+    try {
+      const next = {
+        is_pinned: patch.is_pinned ?? conversation.is_pinned,
+        is_muted: patch.is_muted ?? conversation.is_muted,
+      };
+      await updateConversationPreferences(accessToken, conversation.conversation_id, {
+        isPinned: next.is_pinned,
+        isMuted: next.is_muted,
+      });
+      setConversations((current) =>
+        current.map((item) =>
+          item.conversation_id === conversation.conversation_id
+            ? { ...item, ...next }
+            : item,
+        ),
+      );
+      await refreshConversations(accessToken);
+    } catch (reason) {
+      reportError(reason);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function performClearHistory(conversation: Conversation) {
+    if (!accessToken || !window.confirm(t.clearChatHistoryConfirm)) return;
+    setBusy(true);
+    try {
+      await clearConversationHistory(accessToken, conversation.conversation_id);
+      if (selectedConversationId === conversation.conversation_id) {
+        setMessages([]);
+        setMessageSearch("");
+        setMessageSearchResults(null);
+      }
+      await refreshConversations(accessToken);
+      setNotice(t.chatHistoryCleared);
+    } catch (reason) {
+      reportError(reason);
     } finally {
       setBusy(false);
     }
@@ -1077,9 +1350,16 @@ export function App() {
           <ContactProfile
             account={selectedContact}
             commonGroups={commonGroups}
+            contacts={contacts}
             busy={busy}
             t={t}
-            onSaveRemark={performContactRemark}
+            onSaveRemark={(value) => performContactRemark(selectedContact.account_id, value)}
+            onSaveTags={(value) => performContactTags(selectedContact.account_id, value)}
+            onSetPermission={(value) => performContactPermission(selectedContact.account_id, value)}
+            onToggleStarred={() => performContactStar(selectedContact.account_id)}
+            onToggleBlocked={() => performContactBlock(selectedContact.account_id)}
+            onDelete={() => performDeleteContact(selectedContact.account_id)}
+            onRecommend={(recipientId) => performRecommendContact(selectedContact, recipientId)}
             onStartChat={() => void openDirectConversation(selectedContact.account_id)}
             onOpenGroup={(conversationId) => {
               setSelectedContactId(null);
@@ -1091,51 +1371,40 @@ export function App() {
           <>
             <header className="conversation-header">
               <div className="conversation-title-block">
-                <Avatar
-                  label={
-                    selectedConversation.kind === "group"
-                      ? selectedConversation.group_name ?? t.group
-                      : contactDisplayName(selectedPeer) ?? t.unknownUser
-                  }
-                  avatarUrl={selectedConversation.kind === "direct" ? selectedPeer?.avatar_data_url : null}
-                  group={selectedConversation.kind === "group"}
-                />
-                <span>
-                  <h1>
-                    {selectedConversation.kind === "group"
-                      ? selectedConversation.group_name
-                      : contactDisplayName(selectedPeer) ?? t.conversation}
-                  </h1>
-                  <small>
-                    {selectedConversation.kind === "group"
-                      ? `${t.groupCode}: ${selectedConversation.group_code} · ${selectedConversation.member_count ?? 0} ${t.members}`
-                      : selectedPeer?.chat_id ?? selectedConversation.peer_account_id}
-                  </small>
-                </span>
+                <h1>
+                  {selectedConversation.kind === "group"
+                    ? selectedConversation.group_name
+                    : contactDisplayName(selectedPeer) ?? t.conversation}
+                </h1>
               </div>
               <div className="conversation-header-actions">
-                {selectedConversation.kind === "group" && (
-                  <button
-                    className="header-text-button"
-                    type="button"
-                    onClick={() => void openGroupManagement()}
-                  >
-                    ···
-                  </button>
-                )}
+                <button
+                  className="header-text-button"
+                  type="button"
+                  aria-label={t.more}
+                  onClick={() => {
+                    if (selectedConversation.kind === "group") {
+                      void openGroupManagement();
+                    } else {
+                      setDirectDetailsOpen((open) => !open);
+                    }
+                  }}
+                >
+                  ···
+                </button>
               </div>
             </header>
 
             <div className="message-scroll" ref={messageScrollRef}>
               <div className="message-stack">
-                {messages.length === 0 ? (
+                {visibleMessages.length === 0 ? (
                   <div className="conversation-empty">
                     <ChatIcon />
                     <h2>{t.emptyMessagesTitle}</h2>
                     <p>{t.emptyMessagesBody}</p>
                   </div>
                 ) : (
-                  messages.map((message) => {
+                  visibleMessages.map((message) => {
                     const sender = accountById.get(message.sender_account_id);
                     const mine = message.sender_account_id === activeAccount.account_id;
                     return (
@@ -1144,11 +1413,20 @@ export function App() {
                         className={`message-row ${mine ? "mine" : ""}`}
                       >
                         {!mine && (
-                          <Avatar
-                            label={contactDisplayName(sender) ?? message.sender_account_id}
-                            avatarUrl={sender?.avatar_data_url}
-                            small
-                          />
+                          <button
+                            className="message-avatar-button"
+                            type="button"
+                            disabled={!sender || !contacts.some((item) => item.account_id === sender.account_id)}
+                            onClick={() => {
+                              if (sender) void openContactPopover(sender);
+                            }}
+                          >
+                            <Avatar
+                              label={contactDisplayName(sender) ?? message.sender_account_id}
+                              avatarUrl={sender?.avatar_data_url}
+                              small
+                            />
+                          </button>
                         )}
                         <div className="message-body-column">
                           {selectedConversation.kind === "group" && !mine && (
@@ -1157,7 +1435,11 @@ export function App() {
                             </strong>
                           )}
                           <div className="message-bubble">
-                            <p>{message.body}</p>
+                            <MessageContent
+                              body={message.body}
+                              t={t}
+                              onOpenContactCard={(card) => void openRecommendedContact(card)}
+                            />
                           </div>
                           <time>{formatClock(message.created_at)}</time>
                         </div>
@@ -1230,13 +1512,51 @@ export function App() {
                 {t.send}
               </button>
             </form>
+            {selectedConversation.kind === "direct" && (
+              <DirectChatDetails
+                open={directDetailsOpen}
+                peer={selectedPeer ?? null}
+                conversation={selectedConversation}
+                searchQuery={messageSearch}
+                t={t}
+                busy={busy}
+                onSearchQueryChange={setMessageSearch}
+                onOpenPeer={() => {
+                  if (selectedPeer) void openContactPopover(selectedPeer);
+                }}
+                onStartGroup={() => {
+                  if (selectedConversation.peer_account_id) {
+                    setGroupContactIds([selectedConversation.peer_account_id]);
+                    setGroupName(
+                      locale === "zh-CN"
+                        ? `${contactDisplayName(selectedPeer) ?? t.group}群聊`
+                        : `${contactDisplayName(selectedPeer) ?? t.group} group`,
+                    );
+                    setGroupCreateOpen(true);
+                  }
+                }}
+                onToggleMuted={() =>
+                  void performConversationPreference(selectedConversation, {
+                    is_muted: !selectedConversation.is_muted,
+                  })
+                }
+                onTogglePinned={() =>
+                  void performConversationPreference(selectedConversation, {
+                    is_pinned: !selectedConversation.is_pinned,
+                  })
+                }
+                onClearHistory={() => void performClearHistory(selectedConversation)}
+                onClose={() => {
+                  setDirectDetailsOpen(false);
+                  setMessageSearch("");
+                  setMessageSearchResults(null);
+                }}
+              />
+            )}
           </>
         ) : (
-          <div className="conversation-empty landing">
+          <div className="conversation-empty landing" aria-label={socketStatusLabel(socketStatus, t)}>
             <ChatIcon />
-            <h1>{t.appName}</h1>
-            <p>{t.startConversationHint}</p>
-            <small>{socketStatusLabel(socketStatus, t)} · {backend}</small>
           </div>
         )}
 
@@ -1268,6 +1588,33 @@ export function App() {
         onLogout={() => void performLogout()}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {profilePopoverAccount && (
+        <ContactProfilePopover
+          account={profilePopoverAccount}
+          commonGroups={profilePopoverGroups}
+          contacts={contacts}
+          busy={busy}
+          t={t}
+          onSaveRemark={(value) => performContactRemark(profilePopoverAccount.account_id, value)}
+          onSaveTags={(value) => performContactTags(profilePopoverAccount.account_id, value)}
+          onSetPermission={(value) => performContactPermission(profilePopoverAccount.account_id, value)}
+          onToggleStarred={() => performContactStar(profilePopoverAccount.account_id)}
+          onToggleBlocked={() => performContactBlock(profilePopoverAccount.account_id)}
+          onDelete={() => performDeleteContact(profilePopoverAccount.account_id)}
+          onRecommend={(recipientId) => performRecommendContact(profilePopoverAccount, recipientId)}
+          onStartChat={() => {
+            setProfilePopoverAccount(null);
+            void openDirectConversation(profilePopoverAccount.account_id);
+          }}
+          onOpenGroup={(conversationId) => {
+            setProfilePopoverAccount(null);
+            setSelectedConversationId(conversationId);
+            setPrimaryView("chats");
+          }}
+          onClose={() => setProfilePopoverAccount(null)}
+        />
+      )}
 
       {discoveryOpen && (
         <DiscoveryModal
@@ -1426,7 +1773,6 @@ function ChatList(props: {
                 />
                 <span className="chat-list-copy">
                   <strong>{contactDisplayName(entry.contact)}</strong>
-                  <small>{props.t.startConversationHint}</small>
                 </span>
               </button>
             );
@@ -2288,6 +2634,74 @@ function readStoredSession(): AuthSession | null {
     localStorage.removeItem(AUTH_SESSION_KEY);
     return null;
   }
+}
+
+const CONTACT_CARD_PREFIX = "[[contact-card:v1]]";
+
+type ContactCardPayload = {
+  account_id: string;
+  display_name: string;
+  chat_id: string;
+  avatar_data_url?: string | null;
+};
+
+function encodeContactCard(account: Account): string {
+  const payload: ContactCardPayload = {
+    account_id: account.account_id,
+    display_name: account.display_name,
+    chat_id: account.chat_id,
+    avatar_data_url: account.avatar_data_url,
+  };
+  return `${CONTACT_CARD_PREFIX}${JSON.stringify(payload)}`;
+}
+
+function decodeContactCard(body: string): ContactCardPayload | null {
+  if (!body.startsWith(CONTACT_CARD_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(body.slice(CONTACT_CARD_PREFIX.length)) as Partial<ContactCardPayload>;
+    if (
+      typeof parsed.account_id !== "string" ||
+      typeof parsed.display_name !== "string" ||
+      typeof parsed.chat_id !== "string"
+    ) {
+      return null;
+    }
+    return parsed as ContactCardPayload;
+  } catch {
+    return null;
+  }
+}
+
+function MessageContent({
+  body,
+  t,
+  onOpenContactCard,
+}: {
+  body: string;
+  t: Translation;
+  onOpenContactCard(card: ContactCardPayload): void;
+}) {
+  const card = decodeContactCard(body);
+  if (!card) return <p>{body}</p>;
+  return (
+    <button
+      className="contact-message-card"
+      type="button"
+      onClick={() => onOpenContactCard(card)}
+    >
+      <span className="contact-message-card-main">
+        <Avatar
+          label={card.display_name}
+          avatarUrl={card.avatar_data_url}
+        />
+        <span>
+          <strong>{card.display_name}</strong>
+          <small>{card.chat_id}</small>
+        </span>
+      </span>
+      <span className="contact-message-card-footer">{t.contactCard}</span>
+    </button>
+  );
 }
 
 function readableError(reason: unknown): string {

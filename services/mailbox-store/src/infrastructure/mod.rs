@@ -17,6 +17,9 @@ const GROUP_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/mailbox/0002_groups.sql");
 const GROUP_DISCOVERY_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/mailbox/0003_group_discovery.sql");
+const CONVERSATION_PREFERENCES_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/mailbox/0004_conversation_preferences.sql"
+);
 
 #[derive(Clone)]
 pub(crate) struct MailboxRepository {
@@ -45,6 +48,10 @@ impl MailboxRepository {
             .execute(&pool)
             .await
             .context("failed to apply group-discovery migration")?;
+        sqlx::raw_sql(CONVERSATION_PREFERENCES_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply conversation-preferences migration")?;
 
         Ok(Self { pool })
     }
@@ -122,6 +129,8 @@ impl MailboxRepository {
             created_at: row.try_get("created_at")?,
             last_message_at: row.try_get("last_message_at")?,
             unread_count: 0,
+            is_pinned: false,
+            is_muted: false,
             last_message: None,
         })
     }
@@ -135,6 +144,8 @@ impl MailboxRepository {
                 c.created_at,
                 c.last_message_at,
                 COALESCE(unread.unread_count, 0)::BIGINT AS unread_count,
+                COALESCE(preferences.is_pinned, FALSE) AS is_pinned,
+                COALESCE(preferences.is_muted, FALSE) AS is_muted,
                 last_message.message_seq AS last_message_seq,
                 last_message.message_id AS last_message_id,
                 last_message.sender_account_id AS last_sender_account_id,
@@ -145,18 +156,23 @@ impl MailboxRepository {
             FROM direct_conversations c
             LEFT JOIN conversation_reads reads
                 ON reads.conversation_id = c.conversation_id AND reads.account_id = $1
+            LEFT JOIN conversation_preferences preferences
+                ON preferences.conversation_id = c.conversation_id AND preferences.account_id = $1
+            LEFT JOIN conversation_clears clears
+                ON clears.conversation_id = c.conversation_id AND clears.account_id = $1
             LEFT JOIN LATERAL (
                 SELECT COUNT(*)::BIGINT AS unread_count
                 FROM messages m
                 WHERE m.conversation_id = c.conversation_id
                   AND m.sender_account_id <> $1
-                  AND m.message_seq > COALESCE(reads.last_read_seq, 0)
+                  AND m.message_seq > GREATEST(COALESCE(reads.last_read_seq, 0), COALESCE(clears.cleared_through_seq, 0))
             ) unread ON TRUE
             LEFT JOIN LATERAL (
                 SELECT m.message_seq, m.message_id, m.sender_account_id,
                        m.client_message_id, m.payload_format, m.body, m.created_at
                 FROM messages m
                 WHERE m.conversation_id = c.conversation_id
+                  AND m.message_seq > COALESCE(clears.cleared_through_seq, 0)
                 ORDER BY m.message_seq DESC
                 LIMIT 1
             ) last_message ON TRUE
@@ -180,6 +196,8 @@ impl MailboxRepository {
                 g.created_at,
                 g.last_message_at,
                 COALESCE(unread.unread_count, 0)::BIGINT AS unread_count,
+                COALESCE(preferences.is_pinned, FALSE) AS is_pinned,
+                COALESCE(preferences.is_muted, FALSE) AS is_muted,
                 last_message.message_seq AS last_message_seq,
                 last_message.message_id AS last_message_id,
                 last_message.sender_account_id AS last_sender_account_id,
@@ -191,18 +209,23 @@ impl MailboxRepository {
             JOIN group_members gm ON gm.group_id = g.group_id AND gm.account_id = $1
             LEFT JOIN group_reads reads
                 ON reads.conversation_id = g.conversation_id AND reads.account_id = $1
+            LEFT JOIN conversation_preferences preferences
+                ON preferences.conversation_id = g.conversation_id AND preferences.account_id = $1
+            LEFT JOIN conversation_clears clears
+                ON clears.conversation_id = g.conversation_id AND clears.account_id = $1
             LEFT JOIN LATERAL (
                 SELECT COUNT(*)::BIGINT AS unread_count
                 FROM group_messages m
                 WHERE m.conversation_id = g.conversation_id
                   AND m.sender_account_id <> $1
-                  AND m.message_seq > COALESCE(reads.last_read_seq, 0)
+                  AND m.message_seq > GREATEST(COALESCE(reads.last_read_seq, 0), COALESCE(clears.cleared_through_seq, 0))
             ) unread ON TRUE
             LEFT JOIN LATERAL (
                 SELECT m.message_seq, m.message_id, m.sender_account_id,
                        m.client_message_id, m.payload_format, m.body, m.created_at
                 FROM group_messages m
                 WHERE m.conversation_id = g.conversation_id
+                  AND m.message_seq > COALESCE(clears.cleared_through_seq, 0)
                 ORDER BY m.message_seq DESC
                 LIMIT 1
             ) last_message ON TRUE
@@ -234,6 +257,8 @@ impl MailboxRepository {
                 created_at: row.try_get("created_at")?,
                 last_message_at: row.try_get("last_message_at")?,
                 unread_count: row.try_get("unread_count")?,
+                is_pinned: row.try_get("is_pinned")?,
+                is_muted: row.try_get("is_muted")?,
                 last_message: optional_message(&row, conversation_id)?,
             });
         }
@@ -255,13 +280,20 @@ impl MailboxRepository {
                 created_at: row.try_get("created_at")?,
                 last_message_at: row.try_get("last_message_at")?,
                 unread_count: row.try_get("unread_count")?,
+                is_pinned: row.try_get("is_pinned")?,
+                is_muted: row.try_get("is_muted")?,
                 last_message: optional_message(&row, conversation_id)?,
             });
         }
         conversations.sort_by(|left, right| {
-            let left_time = left.last_message_at.unwrap_or(left.created_at);
-            let right_time = right.last_message_at.unwrap_or(right.created_at);
-            right_time.cmp(&left_time)
+            right
+                .is_pinned
+                .cmp(&left.is_pinned)
+                .then_with(|| {
+                    let left_time = left.last_message_at.unwrap_or(left.created_at);
+                    let right_time = right.last_message_at.unwrap_or(right.created_at);
+                    right_time.cmp(&left_time)
+                })
         });
         Ok(conversations)
     }
@@ -312,6 +344,7 @@ impl MailboxRepository {
     pub(crate) async fn list_messages(
         &self,
         conversation_id: Uuid,
+        actor: Uuid,
         before_seq: Option<i64>,
         limit: i64,
     ) -> Result<Vec<MessageRecord>> {
@@ -331,14 +364,19 @@ impl MailboxRepository {
                            created_at
                     FROM group_messages
                     WHERE conversation_id = $1
-                      AND ($2::BIGINT IS NULL OR message_seq < $2)
+                      AND message_seq > COALESCE((
+                          SELECT cleared_through_seq FROM conversation_clears
+                          WHERE conversation_id = $1 AND account_id = $2
+                      ), 0)
+                      AND ($3::BIGINT IS NULL OR message_seq < $3)
                     ORDER BY message_seq DESC
-                    LIMIT $3
+                    LIMIT $4
                 ) recent
                 ORDER BY message_seq ASC
                 ",
             )
             .bind(conversation_id)
+            .bind(actor)
             .bind(before_seq)
             .bind(limit)
             .fetch_all(&self.pool)
@@ -358,14 +396,19 @@ impl MailboxRepository {
                            created_at
                     FROM messages
                     WHERE conversation_id = $1
-                      AND ($2::BIGINT IS NULL OR message_seq < $2)
+                      AND message_seq > COALESCE((
+                          SELECT cleared_through_seq FROM conversation_clears
+                          WHERE conversation_id = $1 AND account_id = $2
+                      ), 0)
+                      AND ($3::BIGINT IS NULL OR message_seq < $3)
                     ORDER BY message_seq DESC
-                    LIMIT $3
+                    LIMIT $4
                 ) recent
                 ORDER BY message_seq ASC
                 ",
             )
             .bind(conversation_id)
+            .bind(actor)
             .bind(before_seq)
             .bind(limit)
             .fetch_all(&self.pool)
@@ -374,6 +417,173 @@ impl MailboxRepository {
         .context("failed to list messages")?;
 
         rows.into_iter().map(row_to_message).collect()
+    }
+
+    pub(crate) async fn search_messages(
+        &self,
+        conversation_id: Uuid,
+        actor: Uuid,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<MessageRecord>> {
+        let is_group = self.is_group_conversation(conversation_id).await?;
+        let rows = if is_group {
+            sqlx::query(
+                r"
+                SELECT *
+                FROM (
+                    SELECT message_seq,
+                           message_id,
+                           conversation_id,
+                           sender_account_id,
+                           client_message_id,
+                           payload_format,
+                           body,
+                           created_at
+                    FROM group_messages
+                    WHERE conversation_id = $1
+                      AND message_seq > COALESCE((
+                          SELECT cleared_through_seq FROM conversation_clears
+                          WHERE conversation_id = $1 AND account_id = $2
+                      ), 0)
+                      AND POSITION(lower($3) IN lower(body)) > 0
+                    ORDER BY message_seq DESC
+                    LIMIT $4
+                ) matches
+                ORDER BY message_seq ASC
+                ",
+            )
+            .bind(conversation_id)
+            .bind(actor)
+            .bind(query)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+        } else {
+            sqlx::query(
+                r"
+                SELECT *
+                FROM (
+                    SELECT message_seq,
+                           message_id,
+                           conversation_id,
+                           sender_account_id,
+                           client_message_id,
+                           payload_format,
+                           body,
+                           created_at
+                    FROM messages
+                    WHERE conversation_id = $1
+                      AND message_seq > COALESCE((
+                          SELECT cleared_through_seq FROM conversation_clears
+                          WHERE conversation_id = $1 AND account_id = $2
+                      ), 0)
+                      AND POSITION(lower($3) IN lower(body)) > 0
+                    ORDER BY message_seq DESC
+                    LIMIT $4
+                ) matches
+                ORDER BY message_seq ASC
+                ",
+            )
+            .bind(conversation_id)
+            .bind(actor)
+            .bind(query)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await
+        }
+        .context("failed to search messages")?;
+
+        rows.into_iter().map(row_to_message).collect()
+    }
+
+    pub(crate) async fn update_conversation_preferences(
+        &self,
+        conversation_id: Uuid,
+        actor: Uuid,
+        is_pinned: bool,
+        is_muted: bool,
+    ) -> Result<()> {
+        sqlx::query(
+            r"
+            INSERT INTO conversation_preferences (conversation_id, account_id, is_pinned, is_muted)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (conversation_id, account_id)
+            DO UPDATE SET is_pinned = EXCLUDED.is_pinned,
+                          is_muted = EXCLUDED.is_muted,
+                          updated_at = now()
+            ",
+        )
+        .bind(conversation_id)
+        .bind(actor)
+        .bind(is_pinned)
+        .bind(is_muted)
+        .execute(&self.pool)
+        .await
+        .context("failed to update conversation preferences")?;
+        Ok(())
+    }
+
+    pub(crate) async fn clear_conversation_history(
+        &self,
+        conversation_id: Uuid,
+        actor: Uuid,
+    ) -> Result<()> {
+        let is_group = self.is_group_conversation(conversation_id).await?;
+        let max_seq: i64 = if is_group {
+            sqlx::query_scalar(
+                "SELECT COALESCE(MAX(message_seq), 0)::BIGINT FROM group_messages WHERE conversation_id = $1",
+            )
+            .bind(conversation_id)
+            .fetch_one(&self.pool)
+            .await
+        } else {
+            sqlx::query_scalar(
+                "SELECT COALESCE(MAX(message_seq), 0)::BIGINT FROM messages WHERE conversation_id = $1",
+            )
+            .bind(conversation_id)
+            .fetch_one(&self.pool)
+            .await
+        }
+        .context("failed to calculate history clear marker")?;
+        sqlx::query(
+            r"
+            INSERT INTO conversation_clears (conversation_id, account_id, cleared_through_seq)
+            VALUES ($1, $2, $3)
+            ON CONFLICT (conversation_id, account_id)
+            DO UPDATE SET cleared_through_seq = GREATEST(
+                              conversation_clears.cleared_through_seq,
+                              EXCLUDED.cleared_through_seq
+                          ),
+                          updated_at = now()
+            ",
+        )
+        .bind(conversation_id)
+        .bind(actor)
+        .bind(max_seq)
+        .execute(&self.pool)
+        .await
+        .context("failed to clear conversation history")?;
+        Ok(())
+    }
+
+    pub(crate) async fn direct_peer(
+        &self,
+        conversation_id: Uuid,
+        actor: Uuid,
+    ) -> Result<Option<Uuid>> {
+        sqlx::query_scalar(
+            r"
+            SELECT CASE WHEN member_a = $2 THEN member_b ELSE member_a END
+            FROM direct_conversations
+            WHERE conversation_id = $1 AND (member_a = $2 OR member_b = $2)
+            ",
+        )
+        .bind(conversation_id)
+        .bind(actor)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to resolve direct conversation peer")
     }
 
     pub(crate) async fn insert_message(

@@ -148,6 +148,65 @@ export async function updateContactRemark(
   });
 }
 
+
+export async function updateContactTags(
+  accessToken: string,
+  accountId: string,
+  tags: string,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}/tags`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ tags: tags.trim() || null }),
+  });
+}
+
+export async function updateContactPermission(
+  accessToken: string,
+  accountId: string,
+  permission: "all" | "chat_only",
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}/permission`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ permission }),
+  });
+}
+
+export async function updateContactStarred(
+  accessToken: string,
+  accountId: string,
+  enabled: boolean,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}/star`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function updateContactBlocked(
+  accessToken: string,
+  accountId: string,
+  enabled: boolean,
+): Promise<Account> {
+  return requestJson<Account>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}/block`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export async function deleteContact(
+  accessToken: string,
+  accountId: string,
+): Promise<void> {
+  await requestJson<void>(`${ACCOUNT_SERVICE_URL}/v1/contacts/${accountId}`, {
+    method: "DELETE",
+    headers: bearerHeaders(accessToken),
+  });
+}
+
 export async function updateAvatar(
   accessToken: string,
   avatarDataUrl: string | null,
@@ -213,6 +272,35 @@ export async function createDirectConversation(
       headers: bearerHeaders(accessToken, true),
       body: JSON.stringify({ peer_account_id: peerAccountId }),
     },
+  );
+}
+
+
+export async function updateConversationPreferences(
+  accessToken: string,
+  conversationId: string,
+  input: { isPinned: boolean; isMuted: boolean },
+): Promise<void> {
+  await requestJson<void>(
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/preferences`,
+    {
+      method: "PATCH",
+      headers: bearerHeaders(accessToken, true),
+      body: JSON.stringify({
+        is_pinned: input.isPinned,
+        is_muted: input.isMuted,
+      }),
+    },
+  );
+}
+
+export async function clearConversationHistory(
+  accessToken: string,
+  conversationId: string,
+): Promise<void> {
+  await requestJson<void>(
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/history`,
+    { method: "DELETE", headers: bearerHeaders(accessToken) },
   );
 }
 
@@ -356,6 +444,19 @@ export async function listMessages(
   const params = new URLSearchParams({ limit: "200" });
   return requestJson<ChatMessage[]>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages?${params.toString()}`,
+    { headers: bearerHeaders(accessToken) },
+  );
+}
+
+export async function searchMessages(
+  accessToken: string,
+  conversationId: string,
+  query: string,
+  limit = 200,
+): Promise<ChatMessage[]> {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  return requestJson<ChatMessage[]>(
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages/search?${params.toString()}`,
     { headers: bearerHeaders(accessToken) },
   );
 }

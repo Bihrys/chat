@@ -13,6 +13,9 @@ const SOCIAL_MIGRATION: &str =
 const PROFILE_CONTACT_MIGRATION: &str = include_str!(
     "../../../../infra/native/postgresql/migrations/identity/0003_profile_contacts.sql"
 );
+const CONTACT_CONTROLS_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/identity/0004_contact_controls.sql"
+);
 
 #[derive(Clone)]
 pub(crate) struct AccountRepository {
@@ -41,6 +44,10 @@ impl AccountRepository {
             .execute(&pool)
             .await
             .context("failed to apply profile/contact migration")?;
+        sqlx::raw_sql(CONTACT_CONTROLS_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply contact-controls migration")?;
 
         Ok(Self { pool })
     }
@@ -115,6 +122,10 @@ impl AccountRepository {
             avatar_data_url: None,
             remark_name: None,
             source: None,
+            tags: None,
+            friend_permission: 0,
+            is_starred: false,
+            is_blocked: false,
             created_at,
         })
     }
@@ -124,7 +135,8 @@ impl AccountRepository {
             r"
             SELECT a.account_id, p.username, p.display_name, p.chat_id,
                    p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
-                   a.created_at
+                   NULL::text AS tags, 0::SMALLINT AS friend_permission,
+                   FALSE AS is_starred, FALSE AS is_blocked, a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE a.account_id = $1
@@ -147,7 +159,8 @@ impl AccountRepository {
             r"
             SELECT a.account_id, p.username, p.display_name, p.chat_id,
                    p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
-                   a.created_at
+                   NULL::text AS tags, 0::SMALLINT AS friend_permission,
+                   FALSE AS is_starred, FALSE AS is_blocked, a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE p.username_normalized = $1
@@ -170,7 +183,8 @@ impl AccountRepository {
             r"
             SELECT a.account_id, p.username, p.display_name, p.chat_id,
                    p.avatar_data_url, NULL::text AS remark_name, NULL::text AS source,
-                   a.created_at
+                   NULL::text AS tags, 0::SMALLINT AS friend_permission,
+                   FALSE AS is_starred, FALSE AS is_blocked, a.created_at
             FROM accounts a
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE upper(p.chat_id) = upper($1)
@@ -243,7 +257,8 @@ impl AccountRepository {
         let row = sqlx::query(
             r"
             SELECT a.account_id, p.username, p.display_name, p.chat_id,
-                   p.avatar_data_url, c.remark_name, c.source, a.created_at
+                   p.avatar_data_url, c.remark_name, c.source, c.tags, c.friend_permission,
+                   c.is_starred, c.is_blocked, a.created_at
             FROM contacts c
             JOIN accounts a ON a.account_id = c.contact_account_id
             JOIN account_profiles p ON p.account_id = a.account_id
@@ -286,6 +301,123 @@ impl AccountRepository {
         self.get_contact(actor, contact).await
     }
 
+
+    pub(crate) async fn update_contact_tags(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+        tags: Option<&str>,
+    ) -> Result<Option<Account>> {
+        let result = sqlx::query(
+            "UPDATE contacts SET tags = $3 WHERE account_id = $1 AND contact_account_id = $2",
+        )
+        .bind(actor)
+        .bind(contact)
+        .bind(tags)
+        .execute(&self.pool)
+        .await
+        .context("failed to update contact tags")?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_contact(actor, contact).await
+    }
+
+    pub(crate) async fn update_contact_permission(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+        permission: i16,
+    ) -> Result<Option<Account>> {
+        let result = sqlx::query(
+            "UPDATE contacts SET friend_permission = $3 WHERE account_id = $1 AND contact_account_id = $2",
+        )
+        .bind(actor)
+        .bind(contact)
+        .bind(permission)
+        .execute(&self.pool)
+        .await
+        .context("failed to update contact permission")?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_contact(actor, contact).await
+    }
+
+    pub(crate) async fn update_contact_starred(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+        starred: bool,
+    ) -> Result<Option<Account>> {
+        let result = sqlx::query(
+            "UPDATE contacts SET is_starred = $3 WHERE account_id = $1 AND contact_account_id = $2",
+        )
+        .bind(actor)
+        .bind(contact)
+        .bind(starred)
+        .execute(&self.pool)
+        .await
+        .context("failed to update starred contact")?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_contact(actor, contact).await
+    }
+
+    pub(crate) async fn update_contact_blocked(
+        &self,
+        actor: Uuid,
+        contact: Uuid,
+        blocked: bool,
+    ) -> Result<Option<Account>> {
+        let result = sqlx::query(
+            "UPDATE contacts SET is_blocked = $3 WHERE account_id = $1 AND contact_account_id = $2",
+        )
+        .bind(actor)
+        .bind(contact)
+        .bind(blocked)
+        .execute(&self.pool)
+        .await
+        .context("failed to update blocked contact")?;
+        if result.rows_affected() == 0 {
+            return Ok(None);
+        }
+        self.get_contact(actor, contact).await
+    }
+
+    pub(crate) async fn delete_contact_pair(&self, actor: Uuid, contact: Uuid) -> Result<bool> {
+        let mut transaction = self.pool.begin().await.context("failed to begin contact deletion")?;
+        let result = sqlx::query(
+            r"
+            DELETE FROM contacts
+            WHERE (account_id = $1 AND contact_account_id = $2)
+               OR (account_id = $2 AND contact_account_id = $1)
+            ",
+        )
+        .bind(actor)
+        .bind(contact)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to delete contact relationship")?;
+        sqlx::query(
+            r"
+            UPDATE friend_requests
+            SET status = 3, updated_at = now()
+            WHERE status = 0
+              AND ((sender_account_id = $1 AND recipient_account_id = $2)
+                OR (sender_account_id = $2 AND recipient_account_id = $1))
+            ",
+        )
+        .bind(actor)
+        .bind(contact)
+        .execute(&mut *transaction)
+        .await
+        .context("failed to cancel pending friend requests")?;
+        transaction.commit().await.context("failed to commit contact deletion")?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub(crate) async fn delete(&self, account_id: Uuid) -> Result<bool> {
         let result = sqlx::query("DELETE FROM accounts WHERE account_id = $1")
             .bind(account_id)
@@ -299,14 +431,15 @@ impl AccountRepository {
         let rows = sqlx::query(
             r"
             SELECT a.account_id, p.username, p.display_name, p.chat_id,
-                   p.avatar_data_url, c.remark_name, c.source, a.created_at
+                   p.avatar_data_url, c.remark_name, c.source, c.tags, c.friend_permission,
+                   c.is_starred, c.is_blocked, a.created_at
             FROM contacts c
             JOIN accounts a ON a.account_id = c.contact_account_id
             JOIN account_profiles p ON p.account_id = a.account_id
             WHERE c.account_id = $1
               AND a.deleted_at IS NULL
               AND a.status = 1
-            ORDER BY lower(COALESCE(c.remark_name, p.display_name)), p.chat_id
+            ORDER BY c.is_starred DESC, lower(COALESCE(c.remark_name, p.display_name)), p.chat_id
             ",
         )
         .bind(actor)
@@ -318,7 +451,21 @@ impl AccountRepository {
 
     pub(crate) async fn are_contacts(&self, left: Uuid, right: Uuid) -> Result<bool> {
         sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM contacts WHERE account_id = $1 AND contact_account_id = $2)",
+            r"
+            SELECT EXISTS(
+                SELECT 1
+                FROM contacts c
+                WHERE c.account_id = $1
+                  AND c.contact_account_id = $2
+                  AND NOT c.is_blocked
+            ) AND NOT EXISTS(
+                SELECT 1
+                FROM contacts reverse_contact
+                WHERE reverse_contact.account_id = $2
+                  AND reverse_contact.contact_account_id = $1
+                  AND reverse_contact.is_blocked
+            )
+            ",
         )
         .bind(left)
         .bind(right)
@@ -425,6 +572,10 @@ impl AccountRepository {
                     avatar_data_url: row.try_get("peer_avatar_data_url")?,
                     remark_name: None,
                     source: None,
+                    tags: None,
+                    friend_permission: 0,
+                    is_starred: false,
+                    is_blocked: false,
                     created_at: row.try_get("peer_created_at")?,
                 },
             };
@@ -518,6 +669,10 @@ fn row_to_account(row: sqlx::postgres::PgRow) -> Result<Account> {
         avatar_data_url: row.try_get("avatar_data_url")?,
         remark_name: row.try_get("remark_name")?,
         source: row.try_get("source")?,
+        tags: row.try_get("tags")?,
+        friend_permission: row.try_get("friend_permission")?,
+        is_starred: row.try_get("is_starred")?,
+        is_blocked: row.try_get("is_blocked")?,
         created_at: row.try_get("created_at")?,
     })
 }

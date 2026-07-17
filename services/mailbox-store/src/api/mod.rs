@@ -88,6 +88,18 @@ struct MessageHistoryQuery {
 }
 
 #[derive(Debug, Deserialize)]
+struct MessageSearchQuery {
+    q: String,
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UpdateConversationPreferencesRequest {
+    is_pinned: bool,
+    is_muted: bool,
+}
+
+#[derive(Debug, Deserialize)]
 struct WebSocketQuery {
     access_token: String,
 }
@@ -132,6 +144,8 @@ struct ConversationResponse {
     created_at: String,
     last_message_at: Option<String>,
     unread_count: i64,
+    is_pinned: bool,
+    is_muted: bool,
     last_message: Option<MessageWire>,
 }
 
@@ -209,6 +223,18 @@ pub(crate) fn router(state: AppState) -> Router {
             "/v1/conversations/{conversation_id}/messages",
             get(list_messages).post(create_message),
         )
+        .route(
+            "/v1/conversations/{conversation_id}/messages/search",
+            get(search_messages),
+        )
+        .route(
+            "/v1/conversations/{conversation_id}/preferences",
+            axum::routing::patch(update_conversation_preferences),
+        )
+        .route(
+            "/v1/conversations/{conversation_id}/history",
+            delete(clear_conversation_history),
+        )
         .route("/v1/conversations/{conversation_id}/read", post(mark_read))
         .route("/v1/groups", post(create_group))
         .route("/v1/groups/lookup", get(lookup_group))
@@ -268,7 +294,20 @@ async fn list_conversations(
         .list_conversations(actor)
         .await
         .map_err(internal_error)?;
-    Ok(Json(conversations.into_iter().map(Into::into).collect()))
+    let mut visible = Vec::with_capacity(conversations.len());
+    for conversation in conversations {
+        if let Some(peer) = conversation.peer_account_id
+            && !state
+                .contacts
+                .are_contacts(actor, peer)
+                .await
+                .map_err(internal_error)?
+        {
+            continue;
+        }
+        visible.push(ConversationResponse::from(conversation));
+    }
+    Ok(Json(visible))
 }
 
 async fn list_common_groups(
@@ -318,7 +357,39 @@ async fn list_messages(
     );
     let messages = state
         .mailbox
-        .list_messages(conversation_id, query.before_seq, limit)
+        .list_messages(conversation_id, actor, query.before_seq, limit)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(messages.into_iter().map(message_to_wire).collect()))
+}
+
+async fn search_messages(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<Uuid>,
+    Query(query): Query<MessageSearchQuery>,
+) -> Result<Json<Vec<MessageWire>>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, conversation_id, actor).await?;
+    let term = query.q.trim();
+    if term.is_empty() {
+        return Ok(Json(Vec::new()));
+    }
+    if term.chars().count() > 200 {
+        return Err(ApiError::bad_request(
+            "message_search_too_long",
+            "message search must be at most 200 characters",
+        ));
+    }
+    let limit = i64::from(
+        query
+            .limit
+            .unwrap_or(DEFAULT_HISTORY_LIMIT)
+            .clamp(1, MAX_HISTORY_LIMIT),
+    );
+    let messages = state
+        .mailbox
+        .search_messages(conversation_id, actor, term, limit)
         .await
         .map_err(internal_error)?;
     Ok(Json(messages.into_iter().map(message_to_wire).collect()))
@@ -332,6 +403,14 @@ async fn create_message(
 ) -> Result<(StatusCode, Json<MessageWire>), ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
+    if let Some(peer) = state
+        .mailbox
+        .direct_peer(conversation_id, actor)
+        .await
+        .map_err(internal_error)?
+    {
+        ensure_contacts(&state, actor, peer).await?;
+    }
     let body = validate_message_body(&request.body)?;
     let message = state
         .mailbox
@@ -351,6 +430,42 @@ async fn create_message(
         state.events.publish(member, event.clone()).await;
     }
     Ok((StatusCode::CREATED, Json(message_wire)))
+}
+
+async fn update_conversation_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<Uuid>,
+    Json(request): Json<UpdateConversationPreferencesRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, conversation_id, actor).await?;
+    state
+        .mailbox
+        .update_conversation_preferences(
+            conversation_id,
+            actor,
+            request.is_pinned,
+            request.is_muted,
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_conversation_history(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, conversation_id, actor).await?;
+    state
+        .mailbox
+        .clear_conversation_history(conversation_id, actor)
+        .await
+        .map_err(internal_error)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn mark_read(
@@ -795,6 +910,8 @@ impl From<ConversationRecord> for ConversationResponse {
             created_at: format_time(conversation.created_at),
             last_message_at: conversation.last_message_at.map(format_time),
             unread_count: conversation.unread_count,
+            is_pinned: conversation.is_pinned,
+            is_muted: conversation.is_muted,
             last_message: conversation.last_message.map(message_to_wire),
         }
     }

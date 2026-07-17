@@ -119,6 +119,25 @@ const bobContact = await json(`${accountBase}/v1/contacts/${bob.account_id}`, {
   headers: authorized(aliceSession.access_token, false),
 });
 assert(bobContact.remark_name === bobRemark, "contact remark update failed");
+const bobTags = `school,smoke-${stamp}`;
+await json(`${accountBase}/v1/contacts/${bob.account_id}/tags`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ tags: bobTags }),
+});
+await json(`${accountBase}/v1/contacts/${bob.account_id}/permission`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ permission: "chat_only" }),
+});
+const starredBob = await json(`${accountBase}/v1/contacts/${bob.account_id}/star`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ enabled: true }),
+});
+assert(starredBob.tags === bobTags, "contact tags update failed");
+assert(starredBob.friend_permission === "chat_only", "friend permission update failed");
+assert(starredBob.is_starred === true, "starred contact update failed");
 
 console.log("[7/18] Creating a direct conversation between contacts...");
 const conversation = await json(`${mailboxBase}/v1/conversations/direct`, {
@@ -184,6 +203,36 @@ assert(
   history.some((message) => message.message_id === directMessage.message_id),
   "direct message missing from history",
 );
+const searchResults = await json(
+  `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages/search?q=${encodeURIComponent(`hello ${stamp}`)}&limit=200`,
+  { headers: authorized(bobSession.access_token, false) },
+);
+assert(
+  searchResults.some((message) => message.message_id === directMessage.message_id),
+  "server-side chat-content search failed",
+);
+await json(`${mailboxBase}/v1/conversations/${conversation.conversation_id}/preferences`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ is_pinned: true, is_muted: true }),
+});
+const preferredConversations = await json(`${mailboxBase}/v1/conversations`, {
+  headers: authorized(aliceSession.access_token, false),
+});
+const preferredDirect = preferredConversations.find(
+  (item) => item.conversation_id === conversation.conversation_id,
+);
+assert(preferredDirect?.is_pinned === true, "pin chat preference failed");
+assert(preferredDirect?.is_muted === true, "mute chat preference failed");
+await json(`${mailboxBase}/v1/conversations/${conversation.conversation_id}/history`, {
+  method: "DELETE",
+  headers: authorized(aliceSession.access_token, false),
+});
+const clearedHistory = await json(
+  `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages?limit=200`,
+  { headers: authorized(aliceSession.access_token, false) },
+);
+assert(clearedHistory.length === 0, "per-account chat history clear failed");
 
 console.log("[11/18] Creating a group with Bob as an initial member...");
 const group = await json(`${mailboxBase}/v1/groups`, {
@@ -286,7 +335,42 @@ assert(
   "group realtime event mismatch",
 );
 
-console.log("[18/18] Contacts, direct chat, Group ID search, join approval, and group chat passed.");
+const blockedBob = await json(`${accountBase}/v1/contacts/${bob.account_id}/block`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ enabled: true }),
+});
+assert(blockedBob.is_blocked === true, "blacklist update failed");
+const blockedSend = await fetch(
+  `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages`,
+  {
+    method: "POST",
+    headers: authorized(aliceSession.access_token),
+    body: JSON.stringify({
+      client_message_id: crypto.randomUUID(),
+      body: "this must be rejected",
+    }),
+  },
+);
+assert(blockedSend.status === 403, "blacklisted direct message was not rejected");
+await json(`${accountBase}/v1/contacts/${bob.account_id}/block`, {
+  method: "PATCH",
+  headers: authorized(aliceSession.access_token),
+  body: JSON.stringify({ enabled: false }),
+});
+await json(`${accountBase}/v1/contacts/${bob.account_id}`, {
+  method: "DELETE",
+  headers: authorized(aliceSession.access_token, false),
+});
+const contactsAfterDelete = await json(`${accountBase}/v1/contacts`, {
+  headers: authorized(aliceSession.access_token, false),
+});
+assert(
+  !contactsAfterDelete.some((item) => item.account_id === bob.account_id),
+  "contact deletion failed",
+);
+
+console.log("[18/18] Contact controls, chat preferences, direct chat, Group ID search, join approval, and group chat passed.");
 console.log(
   JSON.stringify(
     {

@@ -62,6 +62,21 @@ struct UpdateContactRequest {
 }
 
 #[derive(Deserialize)]
+struct UpdateContactTagsRequest {
+    tags: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateContactPermissionRequest {
+    permission: String,
+}
+
+#[derive(Deserialize)]
+struct UpdateContactFlagRequest {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
 struct CreateFriendRequest {
     recipient_account_id: Uuid,
     message: Option<String>,
@@ -76,6 +91,10 @@ pub(crate) struct AccountResponse {
     avatar_data_url: Option<String>,
     remark_name: Option<String>,
     source: Option<String>,
+    tags: Option<String>,
+    friend_permission: &'static str,
+    is_starred: bool,
+    is_blocked: bool,
     created_at: String,
 }
 
@@ -117,7 +136,23 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/contacts", get(list_contacts))
         .route(
             "/v1/contacts/{account_id}",
-            get(get_contact).patch(update_contact),
+            get(get_contact).patch(update_contact).delete(delete_contact),
+        )
+        .route(
+            "/v1/contacts/{account_id}/tags",
+            axum::routing::patch(update_contact_tags),
+        )
+        .route(
+            "/v1/contacts/{account_id}/permission",
+            axum::routing::patch(update_contact_permission),
+        )
+        .route(
+            "/v1/contacts/{account_id}/star",
+            axum::routing::patch(update_contact_starred),
+        )
+        .route(
+            "/v1/contacts/{account_id}/block",
+            axum::routing::patch(update_contact_blocked),
         )
         .route("/v1/profile/avatar", axum::routing::patch(update_avatar))
         .route(
@@ -260,6 +295,109 @@ async fn update_contact(
         .map_err(internal_error)?
         .ok_or_else(account_not_found)?;
     Ok(Json(account.into()))
+}
+
+async fn update_contact_tags(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<UpdateContactTagsRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let tags = request
+        .tags
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
+    if tags.is_some_and(|value| value.chars().count() > 256) {
+        return Err(ApiError::bad_request(
+            "invalid_contact_tags",
+            "contact tags must be at most 256 characters",
+        ));
+    }
+    let account = state
+        .accounts
+        .update_contact_tags(actor, account_id, tags)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn update_contact_permission(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<UpdateContactPermissionRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let permission = match request.permission.as_str() {
+        "all" => 0_i16,
+        "chat_only" => 1_i16,
+        _ => {
+            return Err(ApiError::bad_request(
+                "invalid_friend_permission",
+                "permission must be all or chat_only",
+            ));
+        }
+    };
+    let account = state
+        .accounts
+        .update_contact_permission(actor, account_id, permission)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn update_contact_starred(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<UpdateContactFlagRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let account = state
+        .accounts
+        .update_contact_starred(actor, account_id, request.enabled)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn update_contact_blocked(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+    Json(request): Json<UpdateContactFlagRequest>,
+) -> Result<Json<AccountResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let account = state
+        .accounts
+        .update_contact_blocked(actor, account_id, request.enabled)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(account_not_found)?;
+    Ok(Json(account.into()))
+}
+
+async fn delete_contact(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(account_id): Path<Uuid>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    if state
+        .accounts
+        .delete_contact_pair(actor, account_id)
+        .await
+        .map_err(internal_error)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(account_not_found())
+    }
 }
 
 async fn update_avatar(
@@ -585,6 +723,10 @@ impl From<Account> for AccountResponse {
             avatar_data_url: account.avatar_data_url,
             remark_name: account.remark_name,
             source: account.source,
+            tags: account.tags,
+            friend_permission: if account.friend_permission == 1 { "chat_only" } else { "all" },
+            is_starred: account.is_starred,
+            is_blocked: account.is_blocked,
             created_at: format_time(account.created_at),
         }
     }
