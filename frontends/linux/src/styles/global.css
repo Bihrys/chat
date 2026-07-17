@@ -742,6 +742,105 @@ body.composer-resizing .composer-resize-handle::after {
   color: var(--text-muted);
 }
 
+.composer-toolbar {
+  grid-column: 1;
+  grid-row: 2;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.composer-tool-button {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.composer-tool-button:hover,
+.composer-tool-button.active {
+  background: var(--list-hover);
+  color: var(--text);
+}
+
+.composer-tool-button svg {
+  width: 23px;
+  height: 23px;
+}
+
+.emoji-picker {
+  position: absolute;
+  z-index: 40;
+  left: clamp(8px, 1.4vw, 16px);
+  bottom: 58px;
+  width: min(438px, calc(100% - 24px));
+  max-height: min(390px, calc(100vh - 150px));
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--card);
+  box-shadow: 0 12px 34px var(--shadow);
+  animation: emoji-picker-in 120ms ease-out;
+}
+
+.emoji-picker-title {
+  padding: 14px 18px 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.emoji-grid {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(10, minmax(30px, 1fr));
+  align-content: start;
+  gap: 3px;
+  padding: 2px 12px 14px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.emoji-item {
+  aspect-ratio: 1;
+  min-width: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  font-family: "Noto Color Emoji", "Apple Color Emoji", "Segoe UI Emoji", sans-serif;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.emoji-item:hover,
+.emoji-item:focus-visible {
+  background: var(--list-hover);
+  outline: none;
+}
+
+@keyframes emoji-picker-in {
+  from {
+    opacity: 0;
+    transform: translateY(5px) scale(0.99);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
 .send-button,
 .primary-button,
 .secondary-button {
@@ -2695,5 +2794,21 @@ body.composer-resizing .composer-resize-handle::after {
 @media (prefers-reduced-motion: reduce) {
   .notice-banner {
     animation: none;
+  }
+}
+
+@media (max-width: 760px) {
+  .emoji-picker {
+    width: min(390px, calc(100% - 16px));
+    left: 8px;
+  }
+
+  .emoji-grid {
+    grid-template-columns: repeat(8, minmax(30px, 1fr));
+    padding-inline: 9px;
+  }
+
+  .emoji-item {
+    font-size: 23px;
   }
 }

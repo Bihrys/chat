@@ -95,6 +95,17 @@ const AUTH_SESSION_KEY = "chat.auth.session.v1";
 const COMPOSER_MIN_HEIGHT = 120;
 const COMPOSER_DEFAULT_HEIGHT = 168;
 const EMPTY_REQUESTS: FriendRequestMailbox = { incoming: [], outgoing: [] };
+const EMOJI_FACES = [
+  "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇",
+  "🙂", "🙃", "😉", "😌", "😍", "🥰", "😘", "😗", "😙", "😚",
+  "😋", "😛", "😝", "😜", "🤪", "🤨", "🧐", "🤓", "😎", "🥸",
+  "🤩", "🥳", "😏", "😒", "😞", "😔", "😟", "😕", "🙁", "☹️",
+  "😣", "😖", "😫", "😩", "🥺", "😢", "😭", "😤", "😠", "😡",
+  "🤬", "🤯", "😳", "🥵", "🥶", "😱", "😨", "😰", "😥", "😓",
+  "🤗", "🤔", "🤭", "🤫", "🤥", "😶", "😐", "😑", "😬", "🙄",
+  "😯", "😦", "😧", "😮", "😲", "🥱", "😴", "🤤", "😪", "😵",
+  "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠",
+] as const;
 
 type PrimaryView = "chats" | "contacts";
 type DiscoveryMode = "friend" | "group";
@@ -150,6 +161,9 @@ export function App() {
   const [chatSearch, setChatSearch] = useState("");
   const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [draft, setDraft] = useState("");
+  const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const emojiPickerRef = useRef<HTMLDivElement | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -202,6 +216,37 @@ export function App() {
   useEffect(() => {
     groupManageOpenRef.current = groupManageOpen;
   }, [groupManageOpen]);
+
+  useEffect(() => {
+    if (!emojiPickerOpen) return;
+
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (emojiPickerRef.current?.contains(target)) return;
+      if (
+        target instanceof Element &&
+        target.closest("[data-emoji-trigger='true']")
+      ) {
+        return;
+      }
+      setEmojiPickerOpen(false);
+    };
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setEmojiPickerOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeOnOutsidePointer);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointer);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [emojiPickerOpen]);
+
+  useEffect(() => {
+    setEmojiPickerOpen(false);
+  }, [selectedConversationId]);
 
   const selectedConversation = useMemo(
     () =>
@@ -621,6 +666,23 @@ export function App() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function insertEmoji(emoji: string) {
+    const textarea = composerTextareaRef.current;
+    const selectionStart = textarea?.selectionStart ?? draft.length;
+    const selectionEnd = textarea?.selectionEnd ?? selectionStart;
+    const nextDraft = `${draft.slice(0, selectionStart)}${emoji}${draft.slice(selectionEnd)}`;
+    if (nextDraft.length > 8_000) return;
+
+    setDraft(nextDraft);
+    window.requestAnimationFrame(() => {
+      const nextTextarea = composerTextareaRef.current;
+      if (!nextTextarea) return;
+      const caret = selectionStart + emoji.length;
+      nextTextarea.focus();
+      nextTextarea.setSelectionRange(caret, caret);
+    });
   }
 
   async function submitMessage() {
@@ -1521,6 +1583,7 @@ export function App() {
                 }}
               />
               <textarea
+                ref={composerTextareaRef}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onKeyDown={(event) => {
@@ -1537,6 +1600,46 @@ export function App() {
                 rows={1}
                 maxLength={8_000}
               />
+              <div className="composer-toolbar">
+                <button
+                  className={`composer-tool-button ${emojiPickerOpen ? "active" : ""}`}
+                  type="button"
+                  data-emoji-trigger="true"
+                  aria-haspopup="dialog"
+                  aria-expanded={emojiPickerOpen}
+                  aria-label={locale === "zh-CN" ? "表情" : "Emoji"}
+                  title={locale === "zh-CN" ? "表情" : "Emoji"}
+                  onClick={() => setEmojiPickerOpen((open) => !open)}
+                >
+                  <SmileIcon />
+                </button>
+                {emojiPickerOpen && (
+                  <div
+                    ref={emojiPickerRef}
+                    className="emoji-picker"
+                    role="dialog"
+                    aria-label={locale === "zh-CN" ? "所有表情" : "All emoji"}
+                  >
+                    <div className="emoji-picker-title">
+                      {locale === "zh-CN" ? "所有表情" : "All emoji"}
+                    </div>
+                    <div className="emoji-grid">
+                      {EMOJI_FACES.map((emoji, index) => (
+                        <button
+                          key={`${emoji}-${index}`}
+                          type="button"
+                          className="emoji-item"
+                          aria-label={emoji}
+                          title={emoji}
+                          onClick={() => insertEmoji(emoji)}
+                        >
+                          {emoji}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
               <button
                 className="send-button"
                 type="submit"
@@ -2673,6 +2776,23 @@ async function handleServerEvent(
     return;
   }
   await refreshConversations(accessToken);
+}
+
+function SmileIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" strokeWidth="1.7" />
+      <circle cx="9" cy="10" r="1" fill="currentColor" />
+      <circle cx="15" cy="10" r="1" fill="currentColor" />
+      <path
+        d="M8.2 14.1c1 1.3 2.2 1.9 3.8 1.9s2.8-.6 3.8-1.9"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
 }
 
 function composerMaximumHeight(paneHeight: number) {
