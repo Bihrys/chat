@@ -286,14 +286,11 @@ impl MailboxRepository {
             });
         }
         conversations.sort_by(|left, right| {
-            right
-                .is_pinned
-                .cmp(&left.is_pinned)
-                .then_with(|| {
-                    let left_time = left.last_message_at.unwrap_or(left.created_at);
-                    let right_time = right.last_message_at.unwrap_or(right.created_at);
-                    right_time.cmp(&left_time)
-                })
+            right.is_pinned.cmp(&left.is_pinned).then_with(|| {
+                let left_time = left.last_message_at.unwrap_or(left.created_at);
+                let right_time = right.last_message_at.unwrap_or(right.created_at);
+                right_time.cmp(&left_time)
+            })
         });
         Ok(conversations)
     }

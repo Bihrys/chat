@@ -301,7 +301,6 @@ impl AccountRepository {
         self.get_contact(actor, contact).await
     }
 
-
     pub(crate) async fn update_contact_tags(
         &self,
         actor: Uuid,
@@ -387,7 +386,11 @@ impl AccountRepository {
     }
 
     pub(crate) async fn delete_contact_pair(&self, actor: Uuid, contact: Uuid) -> Result<bool> {
-        let mut transaction = self.pool.begin().await.context("failed to begin contact deletion")?;
+        let mut transaction = self
+            .pool
+            .begin()
+            .await
+            .context("failed to begin contact deletion")?;
         let result = sqlx::query(
             r"
             DELETE FROM contacts
@@ -414,7 +417,10 @@ impl AccountRepository {
         .execute(&mut *transaction)
         .await
         .context("failed to cancel pending friend requests")?;
-        transaction.commit().await.context("failed to commit contact deletion")?;
+        transaction
+            .commit()
+            .await
+            .context("failed to commit contact deletion")?;
         Ok(result.rows_affected() > 0)
     }
 

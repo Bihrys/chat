@@ -136,7 +136,9 @@ pub(crate) fn router(state: AppState) -> Router {
         .route("/v1/contacts", get(list_contacts))
         .route(
             "/v1/contacts/{account_id}",
-            get(get_contact).patch(update_contact).delete(delete_contact),
+            get(get_contact)
+                .patch(update_contact)
+                .delete(delete_contact),
         )
         .route(
             "/v1/contacts/{account_id}/tags",
@@ -724,7 +726,11 @@ impl From<Account> for AccountResponse {
             remark_name: account.remark_name,
             source: account.source,
             tags: account.tags,
-            friend_permission: if account.friend_permission == 1 { "chat_only" } else { "all" },
+            friend_permission: if account.friend_permission == 1 {
+                "chat_only"
+            } else {
+                "all"
+            },
             is_starred: account.is_starred,
             is_blocked: account.is_blocked,
             created_at: format_time(account.created_at),
