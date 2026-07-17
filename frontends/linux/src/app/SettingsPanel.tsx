@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { Account } from "../lib/types";
-import type { Locale, ThemeMode, Translation } from "../lib/preferences";
+import type { FontSizeLevel, Locale, ThemeMode, Translation } from "../lib/preferences";
 import { MoonIcon, SettingsIcon, SunIcon } from "./PreferenceIcons";
 import { UserAvatar } from "./UserAvatar";
 import { AvatarCropper } from "./AvatarCropper";
@@ -10,9 +10,11 @@ interface SettingsPanelProps {
   account?: Account | null;
   locale: Locale;
   theme: ThemeMode;
+  fontSizeLevel: FontSizeLevel;
   t: Translation;
   onLocaleChange(locale: Locale): void;
   onThemeChange(theme: ThemeMode): void;
+  onFontSizeChange(level: FontSizeLevel): void;
   onAvatarChange?(avatarDataUrl: string | null): Promise<void>;
   onLogout?(): void;
   onClose(): void;
@@ -25,9 +27,11 @@ export function SettingsPanel({
   account,
   locale,
   theme,
+  fontSizeLevel,
   t,
   onLocaleChange,
   onThemeChange,
+  onFontSizeChange,
   onAvatarChange,
   onLogout,
   onClose,
@@ -97,9 +101,11 @@ export function SettingsPanel({
             <GeneralSettings
               locale={locale}
               theme={theme}
+              fontSizeLevel={fontSizeLevel}
               t={t}
               onLocaleChange={onLocaleChange}
               onThemeChange={onThemeChange}
+              onFontSizeChange={onFontSizeChange}
             />
           )}
         </div>
@@ -233,15 +239,19 @@ function AccountSettings({
 function GeneralSettings({
   locale,
   theme,
+  fontSizeLevel,
   t,
   onLocaleChange,
   onThemeChange,
+  onFontSizeChange,
 }: {
   locale: Locale;
   theme: ThemeMode;
+  fontSizeLevel: FontSizeLevel;
   t: Translation;
   onLocaleChange: (locale: Locale) => void;
   onThemeChange: (theme: ThemeMode) => void;
+  onFontSizeChange: (level: FontSizeLevel) => void;
 }) {
   return (
     <div className="settings-page">
@@ -292,12 +302,35 @@ function GeneralSettings({
       </section>
 
       <section className="settings-card">
-        <div className="settings-row">
+        <div className="settings-row font-size-setting">
           <span>
             <strong>{t.fontSize}</strong>
-            <small>{t.standard}</small>
+            <small>{t.fontSizeDescription}</small>
           </span>
-          <input className="font-size-range" type="range" min="0" max="4" defaultValue="1" />
+          <div className="font-size-control">
+            <input
+              className="font-size-range"
+              type="range"
+              min="0"
+              max="8"
+              step="1"
+              value={fontSizeLevel}
+              aria-label={t.fontSize}
+              onChange={(event) =>
+                onFontSizeChange(Number(event.target.value) as FontSizeLevel)
+              }
+            />
+            <div className="font-size-ticks" aria-hidden="true">
+              {Array.from({ length: 9 }, (_, index) => (
+                <i key={index} className={index === fontSizeLevel ? "active" : ""} />
+              ))}
+            </div>
+            <div className="font-size-labels">
+              <span>{t.small}</span>
+              <span className="standard-label">{t.standard}</span>
+              <span>{t.large}</span>
+            </div>
+          </div>
         </div>
       </section>
     </div>

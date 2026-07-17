@@ -158,6 +158,72 @@ pub(crate) struct GroupJoinRequestRecord {
     pub(crate) updated_at: OffsetDateTime,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MediaKind {
+    Image,
+    Video,
+    Voice,
+    Sticker,
+    File,
+}
+
+impl MediaKind {
+    pub(crate) const fn as_i16(self) -> i16 {
+        match self {
+            Self::Image => 0,
+            Self::Video => 1,
+            Self::Voice => 2,
+            Self::Sticker => 3,
+            Self::File => 4,
+        }
+    }
+
+    pub(crate) fn from_i16(value: i16) -> Option<Self> {
+        match value {
+            0 => Some(Self::Image),
+            1 => Some(Self::Video),
+            2 => Some(Self::Voice),
+            3 => Some(Self::Sticker),
+            4 => Some(Self::File),
+            _ => None,
+        }
+    }
+
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Image => "image",
+            Self::Video => "video",
+            Self::Voice => "voice",
+            Self::Sticker => "sticker",
+            Self::File => "file",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct MediaObjectRecord {
+    pub(crate) object_id: Uuid,
+    pub(crate) conversation_id: Uuid,
+    pub(crate) owner_account_id: Uuid,
+    pub(crate) media_kind: MediaKind,
+    pub(crate) file_name: String,
+    pub(crate) content_type: String,
+    pub(crate) byte_len: i64,
+    pub(crate) storage_key: String,
+    pub(crate) created_at: OffsetDateTime,
+}
+
+#[derive(Clone, Debug, Serialize)]
+pub(crate) struct CallSignalWire {
+    pub(crate) call_id: Uuid,
+    pub(crate) conversation_id: Uuid,
+    pub(crate) from_account_id: Uuid,
+    pub(crate) to_account_id: Uuid,
+    pub(crate) media: String,
+    pub(crate) signal_type: String,
+    pub(crate) payload: serde_json::Value,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub(crate) struct MessageRecord {
     pub(crate) message_seq: i64,
@@ -179,6 +245,9 @@ pub(crate) enum ServerEvent {
     },
     MessageCreated {
         message: MessageWire,
+    },
+    CallSignal {
+        signal: CallSignalWire,
     },
     ConversationRead {
         conversation_id: Uuid,

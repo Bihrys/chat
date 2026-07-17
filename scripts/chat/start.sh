@@ -7,13 +7,14 @@ source "$ROOT/scripts/lib/common.sh"
 load_chat_env "$ROOT"
 
 if [[ "$CHAT_ENV" != "local" ]]; then
-    echo "Basic Chat V0 plaintext development commands require CHAT_ENV=local." >&2
+    echo "Basic Chat V0 local development commands require CHAT_ENV=local." >&2
     exit 1
 fi
 
 PID_DIR="$ROOT/var/run/pids/services"
 LOG_DIR="$ROOT/var/logs/services"
-mkdir -p "$PID_DIR" "$LOG_DIR"
+export CHAT_MEDIA_DIR="${CHAT_MEDIA_DIR:-$ROOT/var/data/chat-media}"
+mkdir -p "$PID_DIR" "$LOG_DIR" "$CHAT_MEDIA_DIR"
 
 services=(
     "auth-service|chat-service-auth-service|AUTH_SERVICE_ADDR"

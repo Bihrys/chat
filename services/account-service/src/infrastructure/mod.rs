@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-use crate::domain::{Account, FriendRequestMailbox, FriendRequestRecord, FriendRequestStatus};
+use crate::domain::{Account, FriendRequestMailbox, FriendRequestRecord, FriendRequestStatus, UiPreferences};
 
 const ACCOUNT_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/identity/0001_basic_accounts.sql");
@@ -15,6 +15,9 @@ const PROFILE_CONTACT_MIGRATION: &str = include_str!(
 );
 const CONTACT_CONTROLS_MIGRATION: &str = include_str!(
     "../../../../infra/native/postgresql/migrations/identity/0004_contact_controls.sql"
+);
+const UI_PREFERENCES_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/identity/0005_ui_preferences.sql"
 );
 
 #[derive(Clone)]
@@ -48,8 +51,65 @@ impl AccountRepository {
             .execute(&pool)
             .await
             .context("failed to apply contact-controls migration")?;
+        sqlx::raw_sql(UI_PREFERENCES_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply UI-preferences migration")?;
 
         Ok(Self { pool })
+    }
+
+    pub(crate) async fn get_ui_preferences(&self, account_id: Uuid) -> Result<UiPreferences> {
+        let row = sqlx::query(
+            r"
+            INSERT INTO account_ui_preferences (account_id)
+            VALUES ($1)
+            ON CONFLICT (account_id) DO UPDATE SET account_id = EXCLUDED.account_id
+            RETURNING locale, theme, font_size_level
+            ",
+        )
+        .bind(account_id)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to load account UI preferences")?;
+        Ok(UiPreferences {
+            locale: row.try_get("locale")?,
+            theme: row.try_get("theme")?,
+            font_size_level: row.try_get("font_size_level")?,
+        })
+    }
+
+    pub(crate) async fn update_ui_preferences(
+        &self,
+        account_id: Uuid,
+        locale: &str,
+        theme: &str,
+        font_size_level: i16,
+    ) -> Result<UiPreferences> {
+        let row = sqlx::query(
+            r"
+            INSERT INTO account_ui_preferences (account_id, locale, theme, font_size_level)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (account_id)
+            DO UPDATE SET locale = EXCLUDED.locale,
+                          theme = EXCLUDED.theme,
+                          font_size_level = EXCLUDED.font_size_level,
+                          updated_at = now()
+            RETURNING locale, theme, font_size_level
+            ",
+        )
+        .bind(account_id)
+        .bind(locale)
+        .bind(theme)
+        .bind(font_size_level)
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to update account UI preferences")?;
+        Ok(UiPreferences {
+            locale: row.try_get("locale")?,
+            theme: row.try_get("theme")?,
+            font_size_level: row.try_get("font_size_level")?,
+        })
     }
 
     pub(crate) async fn healthcheck(&self) -> Result<()> {

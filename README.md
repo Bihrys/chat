@@ -27,10 +27,12 @@ cargo xtask chat smoke
 cargo xtask linux dev
 ```
 
-The current vertical slice now includes password registration, login, bearer
-sessions, and the complete one-to-one chat loop. Message bodies still use
-`plaintext_dev_v0` only under `CHAT_ENV=local` until E2EE is inserted. Do not expose the development chat endpoints to an untrusted network.
-See `docs/development/BASIC-CHAT-V0.md`.
+The current local-development slice includes password registration, contacts,
+private and group chat, nine-level UI preferences, authenticated media transfer,
+voice messages, stickers, and one-to-one WebRTC audio/video calls. Text and media
+metadata still use development-only plaintext payloads until E2EE is inserted.
+Do not expose these endpoints to an untrusted network.
+See `docs/development/BASIC-CHAT-V0.md` and `docs/development/MEDIA-CALLS-V0.md`.
 
 ## Useful commands
 

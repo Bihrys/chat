@@ -6,6 +6,7 @@ import {
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
+  type CSSProperties,
   type ReactNode,
 } from "react";
 import { invoke, isTauri } from "@tauri-apps/api/core";
@@ -21,6 +22,7 @@ import {
   getContact,
   getCurrentAccount,
   getGroup,
+  getUiPreferences,
   listCommonGroups,
   listContacts,
   listConversations,
@@ -40,6 +42,7 @@ import {
   searchMessages,
   sendFriendRequest,
   sendMessage,
+  uploadMedia,
   setGroupMemberRole,
   updateAvatar,
   updateContactBlocked,
@@ -48,6 +51,7 @@ import {
   updateContactStarred,
   updateContactTags,
   updateConversationPreferences,
+  updateUiPreferences,
 } from "../lib/api";
 import type {
   Account,
@@ -60,17 +64,22 @@ import type {
   GroupDiscovery,
   GroupJoinRequest,
   GroupRole,
+  MediaKind,
+  MediaMessagePayload,
   ServerEvent,
   SocketStatus,
 } from "../lib/types";
 import { connectChatSocket } from "../lib/ws";
 import {
   applyDocumentPreferences,
+  readStoredFontSize,
   readStoredLocale,
   readStoredTheme,
+  storeFontSize,
   storeLocale,
   storeTheme,
   translations,
+  type FontSizeLevel,
   type Locale,
   type ThemeMode,
   type Translation,
@@ -90,10 +99,20 @@ import { SettingsPanel } from "./SettingsPanel";
 import { ContactProfile, ContactProfilePopover } from "./ContactProfile";
 import { DirectChatDetails } from "./DirectChatDetails";
 import { UserAvatar as Avatar } from "./UserAvatar";
+import { CallOverlay } from "./CallOverlay";
+import { MediaMessage, parseMediaMessage } from "./MediaMessage";
+import { usePeerCall } from "../lib/usePeerCall";
 
 const AUTH_SESSION_KEY = "chat.auth.session.v1";
 const COMPOSER_MIN_HEIGHT = 120;
 const COMPOSER_DEFAULT_HEIGHT = 168;
+const LIST_PANE_WIDTH_KEY = "chat.ui.list-pane-width.v1";
+const LIST_PANE_MIN_WIDTH = 210;
+const LIST_PANE_MAX_WIDTH = 520;
+const DEFAULT_LIST_PANE_WIDTH = 285;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
+const MAX_MEDIA_BYTES = 128 * 1024 * 1024;
+const MAX_VOICE_SECONDS = 60;
 const EMPTY_REQUESTS: FriendRequestMailbox = { incoming: [], outgoing: [] };
 const EMOJI_FACES = [
   "😀", "😃", "😄", "😁", "😆", "😅", "😂", "🤣", "😊", "😇",
@@ -107,6 +126,8 @@ const EMOJI_FACES = [
   "🤐", "🥴", "🤢", "🤮", "🤧", "😷", "🤒", "🤕", "🤑", "🤠",
 ] as const;
 
+const BUILTIN_STICKERS = ["😂", "😭", "😍", "😡", "🥺", "🤣", "😎", "🤔", "😴", "🤯", "🥳", "👍"] as const;
+
 type PrimaryView = "chats" | "contacts";
 type DiscoveryMode = "friend" | "group";
 type WindowChromeMode = "checking" | "custom" | "native";
@@ -118,6 +139,8 @@ export function App() {
   const [backend, setBackend] = useState("checking");
   const [locale, setLocale] = useState<Locale>(readStoredLocale);
   const [theme, setTheme] = useState<ThemeMode>(readStoredTheme);
+  const [fontSizeLevel, setFontSizeLevel] = useState<FontSizeLevel>(readStoredFontSize);
+  const [listPaneWidth, setListPaneWidth] = useState(readStoredListPaneWidth);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const t = translations[locale];
@@ -129,6 +152,7 @@ export function App() {
 
   const [session, setSession] = useState<AuthSession | null>(readStoredSession);
   const [authChecking, setAuthChecking] = useState(session !== null);
+  const [serverPreferencesLoaded, setServerPreferencesLoaded] = useState(false);
   const [contacts, setContacts] = useState<Account[]>([]);
   const [knownAccounts, setKnownAccounts] = useState<Account[]>([]);
   const [friendRequests, setFriendRequests] =
@@ -162,8 +186,25 @@ export function App() {
   const [groupsExpanded, setGroupsExpanded] = useState(false);
   const [draft, setDraft] = useState("");
   const [emojiPickerOpen, setEmojiPickerOpen] = useState(false);
+  const [emojiPickerTab, setEmojiPickerTab] = useState<"emoji" | "sticker">("emoji");
   const composerTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const emojiPickerRef = useRef<HTMLDivElement | null>(null);
+  const imageInputRef = useRef<HTMLInputElement | null>(null);
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const stickerInputRef = useRef<HTMLInputElement | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingStreamRef = useRef<MediaStream | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingStartedAtRef = useRef(0);
+  const recordingTimeoutRef = useRef<number | null>(null);
+  const recordingTickerRef = useRef<number | null>(null);
+  const recordingConversationRef = useRef<string | null>(null);
+  const discardRecordingRef = useRef(false);
+  const [recordingSeconds, setRecordingSeconds] = useState(0);
+  const [isRecording, setIsRecording] = useState(false);
+  const [mediaUploading, setMediaUploading] = useState(false);
+  const listPaneResizeRef = useRef<{ pointerId: number; startX: number; startWidth: number } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -248,6 +289,24 @@ export function App() {
     setEmojiPickerOpen(false);
   }, [selectedConversationId]);
 
+  useEffect(() => {
+    if (isRecording && recordingConversationRef.current !== selectedConversationId) {
+      stopVoiceRecording(true);
+    }
+    // stopVoiceRecording intentionally reads the current recorder ref.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedConversationId]);
+
+  useEffect(() => () => {
+    if (mediaRecorderRef.current?.state !== "inactive") {
+      discardRecordingRef.current = true;
+      mediaRecorderRef.current?.stop();
+    }
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    if (recordingTimeoutRef.current !== null) window.clearTimeout(recordingTimeoutRef.current);
+    if (recordingTickerRef.current !== null) window.clearInterval(recordingTickerRef.current);
+  }, []);
+
   const selectedConversation = useMemo(
     () =>
       conversations.find(
@@ -281,10 +340,15 @@ export function App() {
   );
 
   useLayoutEffect(() => {
-    applyDocumentPreferences(locale, theme);
+    applyDocumentPreferences(locale, theme, fontSizeLevel);
     storeLocale(locale);
     storeTheme(theme);
-  }, [locale, theme]);
+    storeFontSize(fontSizeLevel);
+  }, [fontSizeLevel, locale, theme]);
+
+  useEffect(() => {
+    localStorage.setItem(LIST_PANE_WIDTH_KEY, String(Math.round(listPaneWidth)));
+  }, [listPaneWidth]);
 
   useEffect(() => {
     if (!notice) return;
@@ -310,6 +374,7 @@ export function App() {
     setSelectedContact(null);
     setCommonGroups([]);
     setSocketStatus("offline");
+    setServerPreferencesLoaded(false);
   }, []);
 
   const mergeKnownAccounts = useCallback((accounts: Account[]) => {
@@ -349,6 +414,16 @@ export function App() {
     [clearSession],
   );
 
+  const peerCall = usePeerCall({
+    accessToken,
+    activeAccountId: activeAccount?.account_id ?? null,
+    onError: reportError,
+  });
+  const handleCallSignalRef = useRef(peerCall.handleSignal);
+  useEffect(() => {
+    handleCallSignalRef.current = peerCall.handleSignal;
+  }, [peerCall.handleSignal]);
+
   const appendMessage = useCallback((incoming: ChatMessage) => {
     setMessages((current) => {
       if (current.some((message) => message.message_id === incoming.message_id)) {
@@ -386,9 +461,17 @@ export function App() {
     }
     let cancelled = false;
     setAuthChecking(true);
-    void getCurrentAccount(accessToken)
-      .then((account) => {
-        if (!cancelled) saveSession({ ...session, account });
+    void Promise.all([
+      getCurrentAccount(accessToken),
+      getUiPreferences(accessToken),
+    ])
+      .then(([account, preferences]) => {
+        if (cancelled) return;
+        saveSession({ ...session, account });
+        setLocale(preferences.locale);
+        setTheme(preferences.theme);
+        setFontSizeLevel(preferences.font_size_level);
+        setServerPreferencesLoaded(true);
       })
       .catch((reason) => {
         if (!cancelled) {
@@ -405,6 +488,18 @@ export function App() {
     // accessToken is the stable session identity.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accessToken]);
+
+  useEffect(() => {
+    if (!accessToken || !serverPreferencesLoaded) return;
+    const timeout = window.setTimeout(() => {
+      void updateUiPreferences(accessToken, {
+        locale,
+        theme,
+        font_size_level: fontSizeLevel,
+      }).catch(() => undefined);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [accessToken, fontSizeLevel, locale, serverPreferencesLoaded, theme]);
 
   useEffect(() => {
     selectedConversationRef.current = selectedConversationId;
@@ -433,6 +528,10 @@ export function App() {
     const stopSocket = connectChatSocket(accessToken, {
       onStatus: setSocketStatus,
       onEvent: (event) => {
+        if (event.type === "call_signal") {
+          void handleCallSignalRef.current(event.payload.signal).catch(reportError);
+          return;
+        }
         void handleServerEvent(
           event,
           accessToken,
@@ -642,6 +741,203 @@ export function App() {
     setComposerHeight((current) =>
       clampComposerHeight(current + delta, paneHeight),
     );
+  }
+
+  function beginListPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    listPaneResizeRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startWidth: listPaneWidth,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("list-pane-resizing");
+    event.preventDefault();
+  }
+
+  function moveListPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = listPaneResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    setListPaneWidth(clampListPaneWidth(resize.startWidth + event.clientX - resize.startX));
+  }
+
+  function endListPaneResize(event: ReactPointerEvent<HTMLDivElement>) {
+    const resize = listPaneResizeRef.current;
+    if (!resize || resize.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    listPaneResizeRef.current = null;
+    document.body.classList.remove("list-pane-resizing");
+  }
+
+  function resizeListPaneBy(delta: number) {
+    setListPaneWidth((current) => clampListPaneWidth(current + delta));
+  }
+
+  async function uploadAndSendMedia(
+    conversationId: string,
+    blob: Blob,
+    kind: MediaKind,
+    fileName: string,
+    metadata: Partial<Pick<MediaMessagePayload, "duration_ms" | "width" | "height">> = {},
+  ) {
+    if (!accessToken || mediaUploading) return;
+    if (blob.size <= 0) throw new Error(t.uploadFailed);
+    if ((kind === "image" || kind === "sticker") && blob.size > MAX_IMAGE_BYTES) {
+      throw new Error(t.mediaTooLarge);
+    }
+    if (blob.size > MAX_MEDIA_BYTES) throw new Error(t.mediaTooLarge);
+
+    setMediaUploading(true);
+    setError(null);
+    try {
+      const object = await uploadMedia(accessToken, conversationId, blob, {
+        kind,
+        fileName: normalizedMediaFileName(fileName, kind),
+      });
+      const payload: MediaMessagePayload = {
+        object_id: object.object_id,
+        media_kind: object.media_kind,
+        file_name: object.file_name,
+        content_type: object.content_type,
+        byte_len: object.byte_len,
+        ...metadata,
+      };
+      const created = await sendMessage(
+        accessToken,
+        conversationId,
+        JSON.stringify(payload),
+        crypto.randomUUID(),
+        kind === "sticker" ? "sticker_v0" : "media_v0",
+      );
+      if (conversationId === selectedConversationRef.current) appendMessage(created);
+      await refreshConversations(accessToken);
+    } catch (reason) {
+      reportError(reason);
+      throw reason;
+    } finally {
+      setMediaUploading(false);
+    }
+  }
+
+  async function handleMediaFile(file: File | undefined, kind: MediaKind) {
+    const conversationId = selectedConversationRef.current;
+    if (!file || !conversationId) return;
+    try {
+      let metadata: Partial<Pick<MediaMessagePayload, "duration_ms" | "width" | "height">> = {};
+      if (kind === "image" || kind === "sticker") {
+        metadata = await readImageMetadata(file);
+      } else if (kind === "video") {
+        metadata = await readVideoMetadata(file);
+      }
+      await uploadAndSendMedia(conversationId, file, kind, file.name, metadata);
+      setEmojiPickerOpen(false);
+    } catch (reason) {
+      reportError(reason);
+    }
+  }
+
+  async function sendBuiltInSticker(emoji: string) {
+    const conversationId = selectedConversationRef.current;
+    if (!conversationId) return;
+    try {
+      const blob = await emojiStickerBlob(emoji);
+      await uploadAndSendMedia(
+        conversationId,
+        blob,
+        "sticker",
+        `sticker-${Date.now()}.png`,
+        { width: 256, height: 256 },
+      );
+      setEmojiPickerOpen(false);
+    } catch (reason) {
+      reportError(reason);
+    }
+  }
+
+  function clearRecordingResources() {
+    if (recordingTimeoutRef.current !== null) {
+      window.clearTimeout(recordingTimeoutRef.current);
+      recordingTimeoutRef.current = null;
+    }
+    if (recordingTickerRef.current !== null) {
+      window.clearInterval(recordingTickerRef.current);
+      recordingTickerRef.current = null;
+    }
+    recordingStreamRef.current?.getTracks().forEach((track) => track.stop());
+    recordingStreamRef.current = null;
+    mediaRecorderRef.current = null;
+    setIsRecording(false);
+    setRecordingSeconds(0);
+  }
+
+  async function startVoiceRecording() {
+    const conversationId = selectedConversationRef.current;
+    if (!conversationId || isRecording || mediaUploading) return;
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setError(t.unsupportedMediaRecorder);
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = preferredRecordingMimeType();
+      const recorder = mimeType
+        ? new MediaRecorder(stream, { mimeType })
+        : new MediaRecorder(stream);
+      recordingStreamRef.current = stream;
+      mediaRecorderRef.current = recorder;
+      recordingChunksRef.current = [];
+      recordingConversationRef.current = conversationId;
+      discardRecordingRef.current = false;
+      recordingStartedAtRef.current = Date.now();
+      setRecordingSeconds(0);
+      setIsRecording(true);
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) recordingChunksRef.current.push(event.data);
+      };
+      recorder.onerror = () => {
+        clearRecordingResources();
+        setError(t.uploadFailed);
+      };
+      recorder.onstop = () => {
+        const targetConversation = recordingConversationRef.current;
+        const discard = discardRecordingRef.current;
+        const durationMs = Math.max(1, Date.now() - recordingStartedAtRef.current);
+        const chunks = recordingChunksRef.current.splice(0);
+        const contentType = recorder.mimeType || mimeType || "audio/webm";
+        clearRecordingResources();
+        recordingConversationRef.current = null;
+        discardRecordingRef.current = false;
+        if (discard || !targetConversation || chunks.length === 0) return;
+        const blob = new Blob(chunks, { type: contentType });
+        void uploadAndSendMedia(
+          targetConversation,
+          blob,
+          "voice",
+          `voice-${Date.now()}.${recordingFileExtension(contentType)}`,
+          { duration_ms: durationMs },
+        ).catch(() => undefined);
+      };
+      recorder.start(250);
+      recordingTickerRef.current = window.setInterval(() => {
+        setRecordingSeconds(Math.min(MAX_VOICE_SECONDS, Math.floor((Date.now() - recordingStartedAtRef.current) / 1000)));
+      }, 250);
+      recordingTimeoutRef.current = window.setTimeout(() => stopVoiceRecording(), MAX_VOICE_SECONDS * 1000);
+    } catch (reason) {
+      clearRecordingResources();
+      setError(mediaAccessError(reason, t));
+    }
+  }
+
+  function stopVoiceRecording(discard = false) {
+    const recorder = mediaRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") {
+      clearRecordingResources();
+      return;
+    }
+    discardRecordingRef.current = discard;
+    recorder.stop();
   }
 
   async function openDirectConversation(peerAccountId: string) {
@@ -1220,6 +1516,8 @@ export function App() {
   }
 
   async function performLogout() {
+    if (isRecording) stopVoiceRecording(true);
+    if (peerCall.call) await peerCall.hangUp();
     if (accessToken) {
       try {
         await logoutAccount(accessToken);
@@ -1240,9 +1538,11 @@ export function App() {
           open={settingsOpen}
           locale={locale}
           theme={theme}
+          fontSizeLevel={fontSizeLevel}
           t={t}
           onLocaleChange={setLocale}
           onThemeChange={setTheme}
+          onFontSizeChange={setFontSizeLevel}
           onClose={() => setSettingsOpen(false)}
         />
       </>
@@ -1290,9 +1590,11 @@ export function App() {
           open={settingsOpen}
           locale={locale}
           theme={theme}
+          fontSizeLevel={fontSizeLevel}
           t={t}
           onLocaleChange={setLocale}
           onThemeChange={setTheme}
+          onFontSizeChange={setFontSizeLevel}
           onClose={() => setSettingsOpen(false)}
         />
       </>
@@ -1304,7 +1606,10 @@ export function App() {
   ).length;
 
   return (
-    <main className={`wechat-shell ${customWindowChrome ? "tauri-frameless" : ""}`}>
+    <main
+      className={`wechat-shell ${customWindowChrome ? "tauri-frameless" : ""}`}
+      style={{ "--list-pane-width": `${listPaneWidth}px` } as CSSProperties}
+    >
       <aside className="app-rail">
         <button
           className="rail-avatar"
@@ -1431,6 +1736,27 @@ export function App() {
           />
         )}
       </aside>
+      <div
+        className="list-pane-resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label={t.dragSidebar}
+        tabIndex={0}
+        onPointerDown={beginListPaneResize}
+        onPointerMove={moveListPaneResize}
+        onPointerUp={endListPaneResize}
+        onPointerCancel={endListPaneResize}
+        onDoubleClick={() => setListPaneWidth(DEFAULT_LIST_PANE_WIDTH)}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowLeft") {
+            event.preventDefault();
+            resizeListPaneBy(-16);
+          } else if (event.key === "ArrowRight") {
+            event.preventDefault();
+            resizeListPaneBy(16);
+          }
+        }}
+      />
 
       <section className="conversation-pane" ref={conversationPaneRef}>
         {customWindowChrome && (
@@ -1473,6 +1799,38 @@ export function App() {
                 </h1>
               </div>
               <div className="conversation-header-actions">
+                {selectedConversation.kind === "direct" && selectedConversation.peer_account_id && (
+                  <>
+                    <button
+                      className="header-icon-button"
+                      type="button"
+                      title={t.audioCall}
+                      aria-label={t.audioCall}
+                      disabled={Boolean(peerCall.call)}
+                      onClick={() => void peerCall.startCall(
+                        selectedConversation.conversation_id,
+                        selectedConversation.peer_account_id!,
+                        "audio",
+                      )}
+                    >
+                      <PhoneIcon />
+                    </button>
+                    <button
+                      className="header-icon-button"
+                      type="button"
+                      title={t.videoCall}
+                      aria-label={t.videoCall}
+                      disabled={Boolean(peerCall.call)}
+                      onClick={() => void peerCall.startCall(
+                        selectedConversation.conversation_id,
+                        selectedConversation.peer_account_id!,
+                        "video",
+                      )}
+                    >
+                      <CameraIcon />
+                    </button>
+                  </>
+                )}
                 <button
                   className="header-text-button"
                   type="button"
@@ -1529,9 +1887,17 @@ export function App() {
                               {contactDisplayName(sender) ?? shortUuid(message.sender_account_id)}
                             </strong>
                           )}
-                          <div className="message-bubble">
+                          <div
+                            className={`message-bubble ${
+                              message.payload_format === "media_v0" || message.payload_format === "sticker_v0"
+                                ? "media-bubble"
+                                : ""
+                            }`}
+                          >
                             <MessageContent
                               body={message.body}
+                              payloadFormat={message.payload_format}
+                              accessToken={session.access_token}
                               t={t}
                               onOpenContactCard={(card) => void openRecommendedContact(card)}
                             />
@@ -1586,6 +1952,13 @@ export function App() {
                 ref={composerTextareaRef}
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
+                onPaste={(event) => {
+                  const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+                  if (image) {
+                    event.preventDefault();
+                    void handleMediaFile(image, "image");
+                  }
+                }}
                 onKeyDown={(event) => {
                   if (
                     event.key === "Enter" &&
@@ -1613,37 +1986,78 @@ export function App() {
                 >
                   <SmileIcon />
                 </button>
+                <button className="composer-tool-button" type="button" title={t.image} aria-label={t.image} disabled={mediaUploading} onClick={() => imageInputRef.current?.click()}>
+                  <ImageIcon />
+                </button>
+                <button className="composer-tool-button" type="button" title={t.video} aria-label={t.video} disabled={mediaUploading} onClick={() => videoInputRef.current?.click()}>
+                  <VideoFileIcon />
+                </button>
+                <button className="composer-tool-button" type="button" title={t.file} aria-label={t.file} disabled={mediaUploading} onClick={() => fileInputRef.current?.click()}>
+                  <FileIcon />
+                </button>
+                <button
+                  className={`composer-tool-button ${isRecording ? "recording" : ""}`}
+                  type="button"
+                  title={isRecording ? t.stopRecording : t.recordVoice}
+                  aria-label={isRecording ? t.stopRecording : t.recordVoice}
+                  disabled={mediaUploading}
+                  onClick={() => isRecording ? stopVoiceRecording() : void startVoiceRecording()}
+                >
+                  <MicrophoneIcon />
+                </button>
+                {isRecording && (
+                  <span className="voice-recording-indicator">
+                    <i /> {t.recording} {formatRecordingTime(recordingSeconds)}
+                    <button type="button" onClick={() => stopVoiceRecording(true)}>×</button>
+                  </span>
+                )}
+                {mediaUploading && <span className="media-uploading">{t.pleaseWait}</span>}
                 {emojiPickerOpen && (
                   <div
                     ref={emojiPickerRef}
                     className="emoji-picker"
                     role="dialog"
-                    aria-label={locale === "zh-CN" ? "所有表情" : "All emoji"}
+                    aria-label={emojiPickerTab === "emoji" ? (locale === "zh-CN" ? "所有表情" : "All emoji") : t.sticker}
                   >
-                    <div className="emoji-picker-title">
-                      {locale === "zh-CN" ? "所有表情" : "All emoji"}
+                    <div className="emoji-picker-tabs">
+                      <button className={emojiPickerTab === "emoji" ? "active" : ""} type="button" onClick={() => setEmojiPickerTab("emoji")}>
+                        <SmileIcon /> <span>{locale === "zh-CN" ? "表情" : "Emoji"}</span>
+                      </button>
+                      <button className={emojiPickerTab === "sticker" ? "active" : ""} type="button" onClick={() => setEmojiPickerTab("sticker")}>
+                        <StickerIcon /> <span>{t.sticker}</span>
+                      </button>
                     </div>
-                    <div className="emoji-grid">
-                      {EMOJI_FACES.map((emoji, index) => (
-                        <button
-                          key={`${emoji}-${index}`}
-                          type="button"
-                          className="emoji-item"
-                          aria-label={emoji}
-                          title={emoji}
-                          onClick={() => insertEmoji(emoji)}
-                        >
-                          {emoji}
+                    {emojiPickerTab === "emoji" ? (
+                      <div className="emoji-grid">
+                        {EMOJI_FACES.map((emoji, index) => (
+                          <button key={`${emoji}-${index}`} type="button" className="emoji-item" aria-label={emoji} title={emoji} onClick={() => insertEmoji(emoji)}>
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="sticker-grid">
+                        {BUILTIN_STICKERS.map((emoji) => (
+                          <button key={emoji} type="button" className="sticker-item" aria-label={emoji} disabled={mediaUploading} onClick={() => void sendBuiltInSticker(emoji)}>
+                            {emoji}
+                          </button>
+                        ))}
+                        <button className="sticker-upload-item" type="button" disabled={mediaUploading} onClick={() => stickerInputRef.current?.click()}>
+                          <PlusIcon /> <span>{t.add}</span>
                         </button>
-                      ))}
-                    </div>
+                      </div>
+                    )}
                   </div>
                 )}
+                <input ref={imageInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { void handleMediaFile(event.currentTarget.files?.[0], "image"); event.currentTarget.value = ""; }} />
+                <input ref={videoInputRef} hidden type="file" accept="video/*" onChange={(event) => { void handleMediaFile(event.currentTarget.files?.[0], "video"); event.currentTarget.value = ""; }} />
+                <input ref={fileInputRef} hidden type="file" onChange={(event) => { void handleMediaFile(event.currentTarget.files?.[0], "file"); event.currentTarget.value = ""; }} />
+                <input ref={stickerInputRef} hidden type="file" accept="image/png,image/jpeg,image/webp,image/gif" onChange={(event) => { void handleMediaFile(event.currentTarget.files?.[0], "sticker"); event.currentTarget.value = ""; }} />
               </div>
               <button
                 className="send-button"
                 type="submit"
-                disabled={busy || !draft.trim()}
+                disabled={busy || mediaUploading || !draft.trim()}
               >
                 {t.send}
               </button>
@@ -1717,13 +2131,32 @@ export function App() {
         account={activeAccount}
         locale={locale}
         theme={theme}
+        fontSizeLevel={fontSizeLevel}
         t={t}
         onLocaleChange={setLocale}
         onThemeChange={setTheme}
+        onFontSizeChange={setFontSizeLevel}
         onAvatarChange={performAvatarChange}
         onLogout={() => void performLogout()}
         onClose={() => setSettingsOpen(false)}
       />
+
+      {peerCall.call && (
+        <CallOverlay
+          call={peerCall.call}
+          peer={accountById.get(peerCall.call.peerAccountId) ?? null}
+          localStream={peerCall.localStream}
+          remoteStream={peerCall.remoteStream}
+          microphoneMuted={peerCall.microphoneMuted}
+          cameraEnabled={peerCall.cameraEnabled}
+          t={t}
+          onAccept={() => void peerCall.acceptCall()}
+          onReject={() => void peerCall.rejectCall()}
+          onHangUp={() => void peerCall.hangUp()}
+          onToggleMicrophone={peerCall.toggleMicrophone}
+          onToggleCamera={peerCall.toggleCamera}
+        />
+      )}
 
       {profilePopoverAccount && (
         <ContactProfilePopover
@@ -1980,7 +2413,7 @@ function ChatList(props: {
                   <time>{formatListTime(conversation.last_message_at, props.locale)}</time>
                 </span>
                 <span className="chat-list-line preview">
-                  <small>{conversation.last_message?.body ?? props.t.noMessagesYet}</small>
+                  <small>{messagePreview(conversation.last_message, props.t)}</small>
                   {conversation.unread_count > 0 && (
                     <b>{boundedCount(conversation.unread_count)}</b>
                   )}
@@ -2778,6 +3211,34 @@ async function handleServerEvent(
   await refreshConversations(accessToken);
 }
 
+function PhoneIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.6 3.8 9 3.2l1.6 4.1-1.7 1.5c1.2 2.5 3 4.3 5.5 5.5l1.5-1.7 4.1 1.6-.6 2.4c-.4 1.7-2 2.8-3.8 2.5C9.8 18.1 5.1 13.4 4.1 7.6c-.3-1.8.8-3.4 2.5-3.8Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>;
+}
+
+function CameraIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="13" height="12" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6"/><path d="m16 10 5-3v10l-5-3Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>;
+}
+
+function ImageIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6"/><circle cx="8.5" cy="9" r="1.5" fill="currentColor"/><path d="m5 18 5-5 3 3 2-2 4 4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>;
+}
+
+function VideoFileIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="13" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.6"/><path d="m16 10 5-3v10l-5-3Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/></svg>;
+}
+
+function FileIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6Z" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="M14 3v5h5M9 12h6M9 16h6" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>;
+}
+
+function MicrophoneIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3" fill="none" stroke="currentColor" strokeWidth="1.7"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3M9 21h6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"/></svg>;
+}
+
+function StickerIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 3h14a2 2 0 0 1 2 2v9l-7 7H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="none" stroke="currentColor" strokeWidth="1.6"/><path d="M14 21v-5a2 2 0 0 1 2-2h5M8 9h.01M16 9h.01M8 13c1.1 1.2 2.4 1.8 4 1.8s2.9-.6 4-1.8" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>;
+}
+
 function SmileIcon() {
   return (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -2809,6 +3270,110 @@ function clampComposerHeight(height: number, paneHeight: number) {
     composerMaximumHeight(paneHeight),
     Math.max(COMPOSER_MIN_HEIGHT, height),
   );
+}
+
+function clampListPaneWidth(width: number) {
+  const viewportLimit = typeof window === "undefined"
+    ? LIST_PANE_MAX_WIDTH
+    : Math.max(LIST_PANE_MIN_WIDTH, window.innerWidth - 58 - 320);
+  return Math.round(Math.min(LIST_PANE_MAX_WIDTH, viewportLimit, Math.max(LIST_PANE_MIN_WIDTH, width)));
+}
+
+function readStoredListPaneWidth() {
+  const raw = localStorage.getItem(LIST_PANE_WIDTH_KEY);
+  const value = raw ? Number(raw) : DEFAULT_LIST_PANE_WIDTH;
+  return Number.isFinite(value) ? clampListPaneWidth(value) : DEFAULT_LIST_PANE_WIDTH;
+}
+
+function normalizedMediaFileName(name: string, kind: MediaKind) {
+  const trimmed = name.trim();
+  if (trimmed) return trimmed.slice(0, 180);
+  const extension = kind === "image" || kind === "sticker" ? "png" : kind === "video" ? "webm" : kind === "voice" ? "webm" : "bin";
+  return `${kind}-${Date.now()}.${extension}`;
+}
+
+async function readImageMetadata(blob: Blob): Promise<{ width: number; height: number }> {
+  if (typeof createImageBitmap === "function") {
+    const bitmap = await createImageBitmap(blob);
+    const metadata = { width: bitmap.width, height: bitmap.height };
+    bitmap.close();
+    return metadata;
+  }
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const image = new Image();
+    image.onload = () => {
+      const metadata = { width: image.naturalWidth, height: image.naturalHeight };
+      URL.revokeObjectURL(url);
+      resolve(metadata);
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read image metadata"));
+    };
+    image.src = url;
+  });
+}
+
+async function readVideoMetadata(blob: Blob): Promise<{ width?: number; height?: number; duration_ms?: number }> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.onloadedmetadata = () => {
+      const result = {
+        width: video.videoWidth || undefined,
+        height: video.videoHeight || undefined,
+        duration_ms: Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : undefined,
+      };
+      URL.revokeObjectURL(url);
+      resolve(result);
+    };
+    video.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Unable to read video metadata"));
+    };
+    video.src = url;
+  });
+}
+
+function emojiStickerBlob(emoji: string): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 256;
+    canvas.height = 256;
+    const context = canvas.getContext("2d");
+    if (!context) {
+      reject(new Error("Canvas is unavailable"));
+      return;
+    }
+    context.clearRect(0, 0, 256, 256);
+    context.textAlign = "center";
+    context.textBaseline = "middle";
+    context.font = '176px "Noto Color Emoji", "Segoe UI Emoji", sans-serif';
+    context.fillText(emoji, 128, 132);
+    canvas.toBlob((blob) => blob ? resolve(blob) : reject(new Error("Sticker rendering failed")), "image/png");
+  });
+}
+
+function preferredRecordingMimeType() {
+  const candidates = ["audio/webm;codecs=opus", "audio/ogg;codecs=opus", "audio/webm", "audio/ogg"];
+  return candidates.find((value) => MediaRecorder.isTypeSupported(value)) ?? "";
+}
+
+function recordingFileExtension(contentType: string) {
+  return contentType.includes("ogg") ? "ogg" : contentType.includes("mp4") ? "m4a" : "webm";
+}
+
+function formatRecordingTime(seconds: number) {
+  return `0:${String(Math.max(0, seconds)).padStart(2, "0")}`;
+}
+
+function mediaAccessError(reason: unknown, t: Translation) {
+  if (reason instanceof DOMException && ["NotAllowedError", "SecurityError", "NotFoundError"].includes(reason.name)) {
+    return t.mediaPermissionDenied;
+  }
+  return readableError(reason);
 }
 
 function readStoredSession(): AuthSession | null {
@@ -2870,13 +3435,28 @@ function decodeContactCard(body: string): ContactCardPayload | null {
 
 function MessageContent({
   body,
+  payloadFormat,
+  accessToken,
   t,
   onOpenContactCard,
 }: {
   body: string;
+  payloadFormat: ChatMessage["payload_format"];
+  accessToken: string;
   t: Translation;
   onOpenContactCard(card: ContactCardPayload): void;
 }) {
+  if (payloadFormat === "media_v0" || payloadFormat === "sticker_v0") {
+    const payload = parseMediaMessage(body);
+    return payload ? (
+      <MediaMessage
+        accessToken={accessToken}
+        payload={payload}
+        t={t}
+        sticker={payloadFormat === "sticker_v0"}
+      />
+    ) : <p>{t.uploadFailed}</p>;
+  }
   const card = decodeContactCard(body);
   if (!card) return <p>{body}</p>;
   return (
@@ -2904,6 +3484,20 @@ function readableError(reason: unknown): string {
   if (reason instanceof ApiError) return `${reason.message} (${reason.code})`;
   if (reason instanceof Error) return reason.message;
   return String(reason);
+}
+
+function messagePreview(message: ChatMessage | null, t: Translation) {
+  if (!message) return t.noMessagesYet;
+  if (message.payload_format === "media_v0" || message.payload_format === "sticker_v0") {
+    const media = parseMediaMessage(message.body);
+    if (!media) return t.file;
+    return media.media_kind === "image" ? `[${t.image}]`
+      : media.media_kind === "video" ? `[${t.video}]`
+      : media.media_kind === "voice" ? `[${t.voiceMessage}]`
+      : media.media_kind === "sticker" ? `[${t.sticker}]`
+      : `[${t.file}]`;
+  }
+  return message.body;
 }
 
 function conversationTitle(

@@ -4,11 +4,12 @@ import { App } from "./app/App";
 import "./styles/global.css";
 import {
   applyDocumentPreferences,
+  readStoredFontSize,
   readStoredLocale,
   readStoredTheme,
 } from "./lib/preferences";
 
-applyDocumentPreferences(readStoredLocale(), readStoredTheme());
+applyDocumentPreferences(readStoredLocale(), readStoredTheme(), readStoredFontSize());
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

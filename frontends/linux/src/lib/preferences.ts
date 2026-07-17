@@ -1,8 +1,10 @@
 export type Locale = "zh-CN" | "en";
 export type ThemeMode = "dark" | "light";
+export type FontSizeLevel = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 const LOCALE_STORAGE_KEY = "chat.preferences.locale.v1";
 const THEME_STORAGE_KEY = "chat.preferences.theme.v1";
+const FONT_SIZE_STORAGE_KEY = "chat.preferences.font-size.v1";
 
 export const translations = {
   "zh-CN": {
@@ -87,6 +89,36 @@ export const translations = {
     appearanceDescription: "切换黑灰深色或白色亮色界面。",
     fontSize: "字体大小",
     standard: "标准",
+    small: "小",
+    large: "大",
+    fontSizeDescription: "九个挡位；第二挡是当前标准大小。",
+    image: "图片",
+    video: "视频",
+    file: "文件",
+    sticker: "表情包",
+    voiceMessage: "语音消息",
+    recordVoice: "录制语音",
+    stopRecording: "停止录音",
+    recording: "正在录音",
+    audioCall: "语音通话",
+    videoCall: "视频通话",
+    incomingAudioCall: "邀请你进行语音通话",
+    incomingVideoCall: "邀请你进行视频通话",
+    calling: "正在呼叫…",
+    connectingCall: "正在连接…",
+    callConnected: "通话中",
+    acceptCall: "接听",
+    rejectCall: "拒绝",
+    endCall: "挂断",
+    muteMicrophone: "静音",
+    unmuteMicrophone: "取消静音",
+    disableCamera: "关闭摄像头",
+    enableCamera: "打开摄像头",
+    mediaPermissionDenied: "无法访问麦克风或摄像头，请检查系统权限。",
+    unsupportedMediaRecorder: "当前 WebView 不支持录音。",
+    mediaTooLarge: "文件过大。图片不超过 25 MiB，视频和语音不超过 128 MiB。",
+    uploadFailed: "媒体上传失败。",
+    dragSidebar: "拖动调整聊天列表宽度",
     addressBook: "通讯录",
     newFriends: "新的朋友",
     groups: "群聊",
@@ -268,6 +300,36 @@ export const translations = {
     appearanceDescription: "Switch between black-gray dark mode and white light mode.",
     fontSize: "Font size",
     standard: "Standard",
+    small: "Small",
+    large: "Large",
+    fontSizeDescription: "Nine levels; the second level is the current standard size.",
+    image: "Image",
+    video: "Video",
+    file: "File",
+    sticker: "Sticker",
+    voiceMessage: "Voice message",
+    recordVoice: "Record voice",
+    stopRecording: "Stop recording",
+    recording: "Recording",
+    audioCall: "Audio call",
+    videoCall: "Video call",
+    incomingAudioCall: "is inviting you to an audio call",
+    incomingVideoCall: "is inviting you to a video call",
+    calling: "Calling…",
+    connectingCall: "Connecting…",
+    callConnected: "Connected",
+    acceptCall: "Accept",
+    rejectCall: "Reject",
+    endCall: "End call",
+    muteMicrophone: "Mute",
+    unmuteMicrophone: "Unmute",
+    disableCamera: "Turn camera off",
+    enableCamera: "Turn camera on",
+    mediaPermissionDenied: "Microphone or camera access failed. Check system permissions.",
+    unsupportedMediaRecorder: "This WebView does not support audio recording.",
+    mediaTooLarge: "File is too large. Images are limited to 25 MiB; video and audio to 128 MiB.",
+    uploadFailed: "Media upload failed.",
+    dragSidebar: "Drag to resize the chat list",
     addressBook: "Contacts",
     newFriends: "New friends",
     groups: "Groups",
@@ -390,8 +452,24 @@ export function storeTheme(theme: ThemeMode) {
   localStorage.setItem(THEME_STORAGE_KEY, theme);
 }
 
-export function applyDocumentPreferences(locale: Locale, theme: ThemeMode) {
+export function readStoredFontSize(): FontSizeLevel {
+  const stored = Number(localStorage.getItem(FONT_SIZE_STORAGE_KEY));
+  return Number.isInteger(stored) && stored >= 0 && stored <= 8
+    ? (stored as FontSizeLevel)
+    : 1;
+}
+
+export function storeFontSize(level: FontSizeLevel) {
+  localStorage.setItem(FONT_SIZE_STORAGE_KEY, String(level));
+}
+
+export function applyDocumentPreferences(
+  locale: Locale,
+  theme: ThemeMode,
+  fontSizeLevel: FontSizeLevel,
+) {
   document.documentElement.lang = locale;
   document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.fontSize = String(fontSizeLevel);
   document.documentElement.style.colorScheme = theme;
 }

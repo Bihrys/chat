@@ -4,6 +4,7 @@ use chat_server_core::ApiError;
 use uuid::Uuid;
 
 const MAX_MESSAGE_CHARS: usize = 10_000;
+const MAX_STRUCTURED_MESSAGE_CHARS: usize = 16_384;
 const MAX_GROUP_NAME_CHARS: usize = 64;
 const MAX_INITIAL_GROUP_MEMBERS: usize = 100;
 const MAX_GROUP_JOIN_MESSAGE_CHARS: usize = 256;
@@ -37,6 +38,26 @@ pub(crate) fn validate_message_body(body: &str) -> Result<String, ApiError> {
             format!("text messages are limited to {MAX_MESSAGE_CHARS} characters"),
         ));
     }
+    Ok(body.to_owned())
+}
+
+pub(crate) fn validate_structured_message_body(body: &str) -> Result<String, ApiError> {
+    let body = body.trim();
+    if body.is_empty() {
+        return Err(ApiError::bad_request(
+            "empty_message",
+            "structured message body cannot be empty",
+        ));
+    }
+    if body.chars().count() > MAX_STRUCTURED_MESSAGE_CHARS {
+        return Err(ApiError::bad_request(
+            "message_too_large",
+            format!("structured messages are limited to {MAX_STRUCTURED_MESSAGE_CHARS} characters"),
+        ));
+    }
+    serde_json::from_str::<serde_json::Value>(body).map_err(|_| {
+        ApiError::bad_request("invalid_structured_message", "structured message body must be valid JSON")
+    })?;
     Ok(body.to_owned())
 }
 

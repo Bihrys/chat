@@ -2,15 +2,18 @@
 
 use std::{collections::HashMap, sync::Arc};
 
+use bytes::Bytes;
+
 use axum::{
     Json, Router,
+    body::Body,
     extract::{
-        Path, Query, State,
+        DefaultBodyLimit, Path, Query, State,
         ws::{Message, WebSocket, WebSocketUpgrade},
     },
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     middleware,
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{delete, get, post},
 };
 use futures_util::{SinkExt, StreamExt};
@@ -25,16 +28,21 @@ use crate::{
     application::{
         canonical_pair, validate_group_join_message, validate_group_lookup_identifier,
         validate_group_name, validate_initial_group_members, validate_message_body,
+        validate_structured_message_body,
     },
     domain::{
         CommonGroupRecord, ConversationRecord, GroupDiscoveryRecord, GroupJoinRequestRecord,
-        GroupMemberRecord, GroupRecord, GroupRole, MessageRecord, MessageWire, ServerEvent,
+        CallSignalWire, GroupMemberRecord, GroupRecord, GroupRole, MediaKind, MediaObjectRecord,
+        MessageRecord, MessageWire, ServerEvent,
     },
     infrastructure::{ContactVerifier, MailboxRepository},
 };
 
 const DEFAULT_HISTORY_LIMIT: u16 = 100;
 const MAX_HISTORY_LIMIT: u16 = 200;
+const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
+const MAX_MEDIA_BYTES: usize = 128 * 1024 * 1024;
+const MAX_CALL_SIGNAL_BYTES: usize = 128 * 1024;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -78,7 +86,50 @@ struct CreateDirectConversationRequest {
 #[derive(Debug, Deserialize)]
 struct CreateMessageRequest {
     client_message_id: Uuid,
+    #[serde(default = "default_payload_format")]
+    payload_format: String,
     body: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaUploadQuery {
+    kind: String,
+    file_name: String,
+}
+
+#[derive(Debug, Serialize)]
+struct MediaObjectResponse {
+    object_id: Uuid,
+    conversation_id: Uuid,
+    owner_account_id: Uuid,
+    media_kind: &'static str,
+    file_name: String,
+    content_type: String,
+    byte_len: i64,
+    created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct MediaMessageMetadata {
+    object_id: Uuid,
+    media_kind: String,
+    file_name: String,
+    content_type: String,
+    byte_len: i64,
+    duration_ms: Option<i64>,
+    width: Option<i64>,
+    height: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SendCallSignalRequest {
+    call_id: Uuid,
+    conversation_id: Uuid,
+    to_account_id: Uuid,
+    media: String,
+    signal_type: String,
+    #[serde(default)]
+    payload: serde_json::Value,
 }
 
 #[derive(Debug, Deserialize)]
@@ -263,8 +314,15 @@ pub(crate) fn router(state: AppState) -> Router {
             "/v1/groups/{group_id}/members/{account_id}/role",
             post(set_group_member_role),
         )
+        .route(
+            "/v1/conversations/{conversation_id}/media",
+            post(upload_media),
+        )
+        .route("/v1/media/{object_id}", get(download_media))
+        .route("/v1/calls/signals", post(send_call_signal))
         .route("/v1/ws", get(websocket_upgrade))
         .with_state(state)
+        .layer(DefaultBodyLimit::max(MAX_MEDIA_BYTES))
         .layer(middleware::from_fn(local_dev_cors))
 }
 
@@ -411,10 +469,60 @@ async fn create_message(
     {
         ensure_contacts(&state, actor, peer).await?;
     }
-    let body = validate_message_body(&request.body)?;
+    let (payload_format, body) = match request.payload_format.as_str() {
+        "plaintext_dev_v0" => (0_i16, validate_message_body(&request.body)?),
+        "media_v0" | "sticker_v0" => {
+            let body = validate_structured_message_body(&request.body)?;
+            let metadata = parse_media_message_metadata(&body)?;
+            let media = state
+                .mailbox
+                .get_media_object(metadata.object_id)
+                .await
+                .map_err(internal_error)?
+                .ok_or_else(|| {
+                    ApiError::not_found("media_not_found", "media object does not exist")
+                })?;
+            if media.conversation_id != conversation_id || media.owner_account_id != actor {
+                return Err(ApiError::forbidden(
+                    "media object does not belong to this sender and conversation",
+                ));
+            }
+            validate_media_message_metadata(&metadata, &media)?;
+            let expected_format = if request.payload_format == "sticker_v0" {
+                2_i16
+            } else {
+                1_i16
+            };
+            if expected_format == 2 && media.media_kind != MediaKind::Sticker {
+                return Err(ApiError::bad_request(
+                    "invalid_sticker",
+                    "sticker message must reference a sticker object",
+                ));
+            }
+            if expected_format == 1 && media.media_kind == MediaKind::Sticker {
+                return Err(ApiError::bad_request(
+                    "invalid_media_message",
+                    "sticker objects must use sticker_v0",
+                ));
+            }
+            (expected_format, body)
+        }
+        _ => {
+            return Err(ApiError::bad_request(
+                "unsupported_payload_format",
+                "unsupported message payload format",
+            ));
+        }
+    };
     let message = state
         .mailbox
-        .insert_message(conversation_id, actor, request.client_message_id, &body)
+        .insert_message(
+            conversation_id,
+            actor,
+            request.client_message_id,
+            payload_format,
+            &body,
+        )
         .await
         .map_err(internal_error)?;
     let message_wire = message_to_wire(message);
@@ -763,6 +871,134 @@ async fn publish_group_update(
     Ok(())
 }
 
+async fn upload_media(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(conversation_id): Path<Uuid>,
+    Query(query): Query<MediaUploadQuery>,
+    body: Bytes,
+) -> Result<(StatusCode, Json<MediaObjectResponse>), ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, conversation_id, actor).await?;
+    if body.is_empty() {
+        return Err(ApiError::bad_request("empty_media", "media upload cannot be empty"));
+    }
+    if body.len() > MAX_MEDIA_BYTES {
+        return Err(ApiError::bad_request("media_too_large", "media upload exceeds 128 MiB"));
+    }
+    let media_kind = parse_media_kind(&query.kind)?;
+    if matches!(media_kind, MediaKind::Image | MediaKind::Sticker)
+        && body.len() > MAX_IMAGE_BYTES
+    {
+        return Err(ApiError::bad_request(
+            "media_too_large",
+            "image and sticker uploads exceed 25 MiB",
+        ));
+    }
+    let file_name = sanitize_file_name(&query.file_name)?;
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or("application/octet-stream")
+        .trim();
+    validate_media_content_type(media_kind, content_type)?;
+    let object = state
+        .mailbox
+        .create_media_object(
+            conversation_id,
+            actor,
+            media_kind,
+            &file_name,
+            content_type,
+            body,
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok((StatusCode::CREATED, Json(object.into())))
+}
+
+async fn download_media(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(object_id): Path<Uuid>,
+) -> Result<Response, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let object = state
+        .mailbox
+        .get_media_object(object_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| ApiError::not_found("media_not_found", "media object does not exist"))?;
+    ensure_member(&state, object.conversation_id, actor).await?;
+    let bytes = state.mailbox.read_media_bytes(&object).await.map_err(internal_error)?;
+    let mut response = Response::new(Body::from(bytes));
+    *response.status_mut() = StatusCode::OK;
+    if let Ok(value) = HeaderValue::from_str(&object.content_type) {
+        response.headers_mut().insert(header::CONTENT_TYPE, value);
+    }
+    if let Ok(value) = HeaderValue::from_str(&object.byte_len.to_string()) {
+        response.headers_mut().insert(header::CONTENT_LENGTH, value);
+    }
+    response.headers_mut().insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("private, max-age=3600"),
+    );
+    Ok(response.into_response())
+}
+
+async fn send_call_signal(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<SendCallSignalRequest>,
+) -> Result<StatusCode, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, request.conversation_id, actor).await?;
+    let peer = state
+        .mailbox
+        .direct_peer(request.conversation_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| ApiError::bad_request("direct_call_only", "calls are currently supported only in direct chats"))?;
+    if peer != request.to_account_id {
+        return Err(ApiError::forbidden("call target is not the direct-chat peer"));
+    }
+    ensure_contacts(&state, actor, peer).await?;
+    if !matches!(request.media.as_str(), "audio" | "video") {
+        return Err(ApiError::bad_request("invalid_call_media", "call media must be audio or video"));
+    }
+    if !matches!(
+        request.signal_type.as_str(),
+        "offer" | "answer" | "ice" | "hangup" | "reject" | "busy"
+    ) {
+        return Err(ApiError::bad_request("invalid_call_signal", "unsupported call signal type"));
+    }
+    if serde_json::to_vec(&request.payload)
+        .map_err(|_| ApiError::bad_request("invalid_call_payload", "call payload is not serializable"))?
+        .len()
+        > MAX_CALL_SIGNAL_BYTES
+    {
+        return Err(ApiError::bad_request("call_payload_too_large", "call signal payload is too large"));
+    }
+    state
+        .events
+        .publish(
+            peer,
+            ServerEvent::CallSignal {
+                signal: CallSignalWire {
+                    call_id: request.call_id,
+                    conversation_id: request.conversation_id,
+                    from_account_id: actor,
+                    to_account_id: peer,
+                    media: request.media,
+                    signal_type: request.signal_type,
+                    payload: request.payload,
+                },
+            },
+        )
+        .await;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 async fn websocket_upgrade(
     State(state): State<AppState>,
     Query(query): Query<WebSocketQuery>,
@@ -986,7 +1222,113 @@ fn message_to_wire(message: MessageRecord) -> MessageWire {
 fn payload_format_name(payload_format: i16) -> &'static str {
     match payload_format {
         0 => "plaintext_dev_v0",
+        1 => "media_v0",
+        2 => "sticker_v0",
         _ => "unknown",
+    }
+}
+
+fn default_payload_format() -> String {
+    "plaintext_dev_v0".to_owned()
+}
+
+fn parse_media_kind(value: &str) -> Result<MediaKind, ApiError> {
+    match value {
+        "image" => Ok(MediaKind::Image),
+        "video" => Ok(MediaKind::Video),
+        "voice" => Ok(MediaKind::Voice),
+        "sticker" => Ok(MediaKind::Sticker),
+        "file" => Ok(MediaKind::File),
+        _ => Err(ApiError::bad_request("invalid_media_kind", "unsupported media kind")),
+    }
+}
+
+fn sanitize_file_name(value: &str) -> Result<String, ApiError> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 180 {
+        return Err(ApiError::bad_request("invalid_file_name", "file name must contain 1-180 characters"));
+    }
+    let name = value
+        .chars()
+        .map(|character| match character {
+            '/' | '\\' | '\0' | '\r' | '\n' => '_',
+            _ => character,
+        })
+        .collect::<String>();
+    Ok(name)
+}
+
+fn validate_media_content_type(kind: MediaKind, content_type: &str) -> Result<(), ApiError> {
+    let valid = match kind {
+        MediaKind::Image | MediaKind::Sticker => content_type.starts_with("image/"),
+        MediaKind::Video => content_type.starts_with("video/"),
+        MediaKind::Voice => content_type.starts_with("audio/"),
+        MediaKind::File => !content_type.is_empty(),
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(ApiError::bad_request("invalid_media_type", "content type does not match media kind"))
+    }
+}
+
+fn parse_media_message_metadata(body: &str) -> Result<MediaMessageMetadata, ApiError> {
+    let metadata: MediaMessageMetadata = serde_json::from_str(body).map_err(|_| {
+        ApiError::bad_request(
+            "invalid_media_message",
+            "media message metadata is invalid",
+        )
+    })?;
+    if metadata.duration_ms.is_some_and(|value| !(1..=86_400_000).contains(&value)) {
+        return Err(ApiError::bad_request(
+            "invalid_media_duration",
+            "media duration is outside the supported range",
+        ));
+    }
+    if metadata
+        .width
+        .is_some_and(|value| !(1..=32_768).contains(&value))
+        || metadata
+            .height
+            .is_some_and(|value| !(1..=32_768).contains(&value))
+    {
+        return Err(ApiError::bad_request(
+            "invalid_media_dimensions",
+            "media dimensions are outside the supported range",
+        ));
+    }
+    Ok(metadata)
+}
+
+fn validate_media_message_metadata(
+    metadata: &MediaMessageMetadata,
+    object: &MediaObjectRecord,
+) -> Result<(), ApiError> {
+    if metadata.media_kind != object.media_kind.as_str()
+        || metadata.file_name != object.file_name
+        || metadata.content_type != object.content_type
+        || metadata.byte_len != object.byte_len
+    {
+        return Err(ApiError::bad_request(
+            "media_metadata_mismatch",
+            "media message metadata does not match the uploaded object",
+        ));
+    }
+    Ok(())
+}
+
+impl From<MediaObjectRecord> for MediaObjectResponse {
+    fn from(object: MediaObjectRecord) -> Self {
+        Self {
+            object_id: object.object_id,
+            conversation_id: object.conversation_id,
+            owner_account_id: object.owner_account_id,
+            media_kind: object.media_kind.as_str(),
+            file_name: object.file_name,
+            content_type: object.content_type,
+            byte_len: object.byte_len,
+            created_at: format_time(object.created_at),
+        }
     }
 }
 

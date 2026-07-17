@@ -19,6 +19,14 @@ pub(crate) struct Account {
     pub(crate) created_at: OffsetDateTime,
 }
 
+
+#[derive(Clone, Debug)]
+pub(crate) struct UiPreferences {
+    pub(crate) locale: String,
+    pub(crate) theme: String,
+    pub(crate) font_size_level: i16,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum FriendRequestStatus {
     Pending,

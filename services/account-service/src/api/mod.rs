@@ -20,7 +20,7 @@ use crate::{
         validate_display_name, validate_friend_request_message, validate_internal_account,
         validate_lookup_identifier,
     },
-    domain::{Account, FriendRequestMailbox, FriendRequestRecord},
+    domain::{Account, FriendRequestMailbox, FriendRequestRecord, UiPreferences},
     infrastructure::AccountRepository,
 };
 
@@ -54,6 +54,20 @@ struct UpdateDisplayNameRequest {
 #[derive(Deserialize)]
 struct UpdateAvatarRequest {
     avatar_data_url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct UpdateUiPreferencesRequest {
+    locale: String,
+    theme: String,
+    font_size_level: i16,
+}
+
+#[derive(Debug, Serialize)]
+struct UiPreferencesResponse {
+    locale: String,
+    theme: String,
+    font_size_level: i16,
 }
 
 #[derive(Deserialize)]
@@ -157,6 +171,10 @@ pub(crate) fn router(state: AppState) -> Router {
             axum::routing::patch(update_contact_blocked),
         )
         .route("/v1/profile/avatar", axum::routing::patch(update_avatar))
+        .route(
+            "/v1/profile/ui-preferences",
+            get(get_ui_preferences).patch(update_ui_preferences),
+        )
         .route(
             "/v1/friend-requests",
             get(list_friend_requests).post(create_friend_request),
@@ -416,6 +434,50 @@ async fn update_avatar(
         .map_err(internal_error)?
         .ok_or_else(account_not_found)?;
     Ok(Json(account.into()))
+}
+
+async fn get_ui_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<UiPreferencesResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    let preferences = state
+        .accounts
+        .get_ui_preferences(actor)
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(preferences.into()))
+}
+
+async fn update_ui_preferences(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<UpdateUiPreferencesRequest>,
+) -> Result<Json<UiPreferencesResponse>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    if !matches!(request.locale.as_str(), "zh-CN" | "en") {
+        return Err(ApiError::bad_request("invalid_locale", "locale must be zh-CN or en"));
+    }
+    if !matches!(request.theme.as_str(), "dark" | "light") {
+        return Err(ApiError::bad_request("invalid_theme", "theme must be dark or light"));
+    }
+    if !(0..=8).contains(&request.font_size_level) {
+        return Err(ApiError::bad_request(
+            "invalid_font_size_level",
+            "font size level must be between 0 and 8",
+        ));
+    }
+    let preferences = state
+        .accounts
+        .update_ui_preferences(
+            actor,
+            &request.locale,
+            &request.theme,
+            request.font_size_level,
+        )
+        .await
+        .map_err(internal_error)?;
+    Ok(Json(preferences.into()))
 }
 
 async fn list_friend_requests(
@@ -713,6 +775,16 @@ fn account_not_found() -> ApiError {
 fn internal_error(error: anyhow::Error) -> ApiError {
     tracing::error!(?error, "account service request failed");
     ApiError::internal("account service request failed")
+}
+
+impl From<UiPreferences> for UiPreferencesResponse {
+    fn from(preferences: UiPreferences) -> Self {
+        Self {
+            locale: preferences.locale,
+            theme: preferences.theme,
+            font_size_level: preferences.font_size_level,
+        }
+    }
 }
 
 impl From<Account> for AccountResponse {

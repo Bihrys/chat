@@ -12,8 +12,13 @@ import type {
   FriendRequestMailbox,
   GroupDetails,
   GroupDiscovery,
+  CallMedia,
+  CallSignalType,
   GroupJoinRequest,
   GroupRole,
+  MediaKind,
+  MediaObject,
+  UiPreferences,
 } from "./types";
 
 export class ApiError extends Error {
@@ -52,6 +57,33 @@ async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
     throw new ApiError(response.status, code, message);
   }
   return (text ? JSON.parse(text) : undefined) as T;
+}
+
+async function requestBlob(url: string, init: RequestInit = {}): Promise<Blob> {
+  let response: Response;
+  try {
+    response = await fetch(url, init);
+  } catch {
+    throw new ApiError(
+      0,
+      "service_unreachable",
+      `Unable to reach local service at ${new URL(url).origin}. Start it with cargo xtask chat up.`,
+    );
+  }
+  if (!response.ok) {
+    const text = await response.text();
+    let code = "request_failed";
+    let message = text || `HTTP ${response.status}`;
+    try {
+      const payload = JSON.parse(text) as { code?: string; message?: string };
+      code = payload.code ?? code;
+      message = payload.message ?? message;
+    } catch {
+      // Preserve the raw response when it is not JSON.
+    }
+    throw new ApiError(response.status, code, message);
+  }
+  return response.blob();
 }
 
 function bearerHeaders(accessToken: string, json = false): HeadersInit {
@@ -215,6 +247,25 @@ export async function updateAvatar(
     method: "PATCH",
     headers: bearerHeaders(accessToken, true),
     body: JSON.stringify({ avatar_data_url: avatarDataUrl }),
+  });
+}
+
+export async function getUiPreferences(
+  accessToken: string,
+): Promise<UiPreferences> {
+  return requestJson<UiPreferences>(`${ACCOUNT_SERVICE_URL}/v1/profile/ui-preferences`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function updateUiPreferences(
+  accessToken: string,
+  preferences: UiPreferences,
+): Promise<UiPreferences> {
+  return requestJson<UiPreferences>(`${ACCOUNT_SERVICE_URL}/v1/profile/ui-preferences`, {
+    method: "PATCH",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify(preferences),
   });
 }
 
@@ -466,15 +517,77 @@ export async function sendMessage(
   conversationId: string,
   body: string,
   clientMessageId: string,
+  payloadFormat: "plaintext_dev_v0" | "media_v0" | "sticker_v0" = "plaintext_dev_v0",
 ): Promise<ChatMessage> {
   return requestJson<ChatMessage>(
     `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages`,
     {
       method: "POST",
       headers: bearerHeaders(accessToken, true),
-      body: JSON.stringify({ client_message_id: clientMessageId, body }),
+      body: JSON.stringify({
+        client_message_id: clientMessageId,
+        payload_format: payloadFormat,
+        body,
+      }),
     },
   );
+}
+
+export async function uploadMedia(
+  accessToken: string,
+  conversationId: string,
+  file: Blob,
+  input: { kind: MediaKind; fileName: string },
+): Promise<MediaObject> {
+  const params = new URLSearchParams({
+    kind: input.kind,
+    file_name: input.fileName,
+  });
+  return requestJson<MediaObject>(
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/media?${params.toString()}`,
+    {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${accessToken}`,
+        "content-type": file.type || "application/octet-stream",
+      },
+      body: file,
+    },
+  );
+}
+
+export async function downloadMedia(
+  accessToken: string,
+  objectId: string,
+): Promise<Blob> {
+  return requestBlob(`${MAILBOX_SERVICE_URL}/v1/media/${objectId}`, {
+    headers: bearerHeaders(accessToken),
+  });
+}
+
+export async function sendCallSignal(
+  accessToken: string,
+  input: {
+    callId: string;
+    conversationId: string;
+    toAccountId: string;
+    media: CallMedia;
+    signalType: CallSignalType;
+    payload?: unknown;
+  },
+): Promise<void> {
+  await requestJson<void>(`${MAILBOX_SERVICE_URL}/v1/calls/signals`, {
+    method: "POST",
+    headers: bearerHeaders(accessToken, true),
+    body: JSON.stringify({
+      call_id: input.callId,
+      conversation_id: input.conversationId,
+      to_account_id: input.toAccountId,
+      media: input.media,
+      signal_type: input.signalType,
+      payload: input.payload ?? null,
+    }),
+  });
 }
 
 export async function markConversationRead(

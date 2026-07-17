@@ -41,7 +41,7 @@ export interface ChatMessage {
   conversation_id: string;
   sender_account_id: string;
   client_message_id: string;
-  payload_format: "plaintext_dev_v0" | "unknown";
+  payload_format: "plaintext_dev_v0" | "media_v0" | "sticker_v0" | "unknown";
   body: string;
   created_at: string;
 }
@@ -112,9 +112,54 @@ export interface GroupJoinRequest {
   updated_at: string;
 }
 
+
+export type MediaKind = "image" | "video" | "voice" | "sticker" | "file";
+
+export interface MediaObject {
+  object_id: string;
+  conversation_id: string;
+  owner_account_id: string;
+  media_kind: MediaKind;
+  file_name: string;
+  content_type: string;
+  byte_len: number;
+  created_at: string;
+}
+
+export interface MediaMessagePayload {
+  object_id: string;
+  media_kind: MediaKind;
+  file_name: string;
+  content_type: string;
+  byte_len: number;
+  duration_ms?: number;
+  width?: number;
+  height?: number;
+}
+
+export type CallMedia = "audio" | "video";
+export type CallSignalType = "offer" | "answer" | "ice" | "hangup" | "reject" | "busy";
+
+export interface CallSignal {
+  call_id: string;
+  conversation_id: string;
+  from_account_id: string;
+  to_account_id: string;
+  media: CallMedia;
+  signal_type: CallSignalType;
+  payload: unknown;
+}
+
+export interface UiPreferences {
+  locale: "zh-CN" | "en";
+  theme: "dark" | "light";
+  font_size_level: 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+}
+
 export type ServerEvent =
   | { type: "connected"; payload: { account_id: string } }
   | { type: "message_created"; payload: { message: ChatMessage } }
+  | { type: "call_signal"; payload: { signal: CallSignal } }
   | {
       type: "conversation_read";
       payload: {

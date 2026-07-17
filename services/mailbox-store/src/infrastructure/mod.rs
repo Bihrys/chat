@@ -1,6 +1,9 @@
 //! PostgreSQL persistence for local direct and group conversations.
 
+use std::{path::PathBuf, sync::Arc};
+
 use anyhow::{Context, Result, anyhow, bail};
+use bytes::Bytes;
 use serde::Deserialize;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -8,7 +11,7 @@ use uuid::Uuid;
 use crate::domain::{
     CommonGroupRecord, ConversationKind, ConversationRecord, GroupDiscoveryRecord,
     GroupJoinRequestRecord, GroupJoinRequestStatus, GroupMemberRecord, GroupRecord, GroupRole,
-    MessageRecord,
+    MediaKind, MediaObjectRecord, MessageRecord,
 };
 
 const DIRECT_MIGRATION: &str =
@@ -20,10 +23,14 @@ const GROUP_DISCOVERY_MIGRATION: &str =
 const CONVERSATION_PREFERENCES_MIGRATION: &str = include_str!(
     "../../../../infra/native/postgresql/migrations/mailbox/0004_conversation_preferences.sql"
 );
+const MEDIA_CALLS_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/mailbox/0005_media_calls.sql"
+);
 
 #[derive(Clone)]
 pub(crate) struct MailboxRepository {
     pool: PgPool,
+    media_root: Arc<PathBuf>,
 }
 
 impl MailboxRepository {
@@ -52,8 +59,19 @@ impl MailboxRepository {
             .execute(&pool)
             .await
             .context("failed to apply conversation-preferences migration")?;
+        sqlx::raw_sql(MEDIA_CALLS_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply media/call migration")?;
 
-        Ok(Self { pool })
+        let media_root = std::env::var_os("CHAT_MEDIA_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("var/data/chat-media"));
+        tokio::fs::create_dir_all(&media_root)
+            .await
+            .with_context(|| format!("failed to create media directory {}", media_root.display()))?;
+
+        Ok(Self { pool, media_root: Arc::new(media_root) })
     }
 
     pub(crate) async fn healthcheck(&self) -> Result<()> {
@@ -588,6 +606,7 @@ impl MailboxRepository {
         conversation_id: Uuid,
         sender_account_id: Uuid,
         client_message_id: Uuid,
+        payload_format: i16,
         body: &str,
     ) -> Result<MessageRecord> {
         let is_group = self.is_group_conversation(conversation_id).await?;
@@ -609,7 +628,7 @@ impl MailboxRepository {
                     payload_format,
                     body
                 )
-                VALUES ($1, $2, $3, $4, 0, $5)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (conversation_id, sender_account_id, client_message_id)
                 DO UPDATE SET client_message_id = EXCLUDED.client_message_id
                 RETURNING message_seq,
@@ -626,6 +645,7 @@ impl MailboxRepository {
             .bind(conversation_id)
             .bind(sender_account_id)
             .bind(client_message_id)
+            .bind(payload_format)
             .bind(body)
             .fetch_one(&mut *transaction)
             .await
@@ -640,7 +660,7 @@ impl MailboxRepository {
                     payload_format,
                     body
                 )
-                VALUES ($1, $2, $3, $4, 0, $5)
+                VALUES ($1, $2, $3, $4, $5, $6)
                 ON CONFLICT (conversation_id, sender_account_id, client_message_id)
                 DO UPDATE SET client_message_id = EXCLUDED.client_message_id
                 RETURNING message_seq,
@@ -657,6 +677,7 @@ impl MailboxRepository {
             .bind(conversation_id)
             .bind(sender_account_id)
             .bind(client_message_id)
+            .bind(payload_format)
             .bind(body)
             .fetch_one(&mut *transaction)
             .await
@@ -697,6 +718,82 @@ impl MailboxRepository {
             .await
             .context("failed to commit message transaction")?;
         Ok(message)
+    }
+
+    pub(crate) async fn create_media_object(
+        &self,
+        conversation_id: Uuid,
+        owner_account_id: Uuid,
+        media_kind: MediaKind,
+        file_name: &str,
+        content_type: &str,
+        bytes: Bytes,
+    ) -> Result<MediaObjectRecord> {
+        let object_id = Uuid::now_v7();
+        let storage_key = object_id.simple().to_string();
+        let final_path = self.media_root.join(&storage_key);
+        let temporary_path = self.media_root.join(format!("{storage_key}.part"));
+
+        tokio::fs::write(&temporary_path, &bytes)
+            .await
+            .with_context(|| format!("failed to write media object {}", temporary_path.display()))?;
+        tokio::fs::rename(&temporary_path, &final_path)
+            .await
+            .with_context(|| format!("failed to finalize media object {}", final_path.display()))?;
+
+        let row = sqlx::query(
+            r"
+            INSERT INTO media_objects (
+                object_id, conversation_id, owner_account_id, media_kind,
+                file_name, content_type, byte_len, storage_key
+            )
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+            RETURNING object_id, conversation_id, owner_account_id, media_kind,
+                      file_name, content_type, byte_len, storage_key, created_at
+            ",
+        )
+        .bind(object_id)
+        .bind(conversation_id)
+        .bind(owner_account_id)
+        .bind(media_kind.as_i16())
+        .bind(file_name)
+        .bind(content_type)
+        .bind(i64::try_from(bytes.len()).context("media object length overflow")?)
+        .bind(&storage_key)
+        .fetch_one(&self.pool)
+        .await;
+
+        match row {
+            Ok(row) => row_to_media_object(row),
+            Err(error) => {
+                let _ = tokio::fs::remove_file(&final_path).await;
+                Err(error).context("failed to persist media object")
+            }
+        }
+    }
+
+    pub(crate) async fn get_media_object(&self, object_id: Uuid) -> Result<Option<MediaObjectRecord>> {
+        let row = sqlx::query(
+            r"
+            SELECT object_id, conversation_id, owner_account_id, media_kind,
+                   file_name, content_type, byte_len, storage_key, created_at
+            FROM media_objects
+            WHERE object_id = $1
+            ",
+        )
+        .bind(object_id)
+        .fetch_optional(&self.pool)
+        .await
+        .context("failed to fetch media object")?;
+        row.map(row_to_media_object).transpose()
+    }
+
+    pub(crate) async fn read_media_bytes(&self, record: &MediaObjectRecord) -> Result<Bytes> {
+        let path = self.media_root.join(&record.storage_key);
+        let bytes = tokio::fs::read(&path)
+            .await
+            .with_context(|| format!("failed to read media object {}", path.display()))?;
+        Ok(Bytes::from(bytes))
     }
 
     pub(crate) async fn mark_read(&self, conversation_id: Uuid, actor: Uuid) -> Result<i64> {
@@ -1448,6 +1545,23 @@ fn optional_message(
         })),
         None => Ok(None),
     }
+}
+
+fn row_to_media_object(row: sqlx::postgres::PgRow) -> Result<MediaObjectRecord> {
+    let media_kind_value: i16 = row.try_get("media_kind")?;
+    let media_kind = MediaKind::from_i16(media_kind_value)
+        .ok_or_else(|| anyhow!("invalid media kind {media_kind_value}"))?;
+    Ok(MediaObjectRecord {
+        object_id: row.try_get("object_id")?,
+        conversation_id: row.try_get("conversation_id")?,
+        owner_account_id: row.try_get("owner_account_id")?,
+        media_kind,
+        file_name: row.try_get("file_name")?,
+        content_type: row.try_get("content_type")?,
+        byte_len: row.try_get("byte_len")?,
+        storage_key: row.try_get("storage_key")?,
+        created_at: row.try_get("created_at")?,
+    })
 }
 
 fn row_to_message(row: sqlx::postgres::PgRow) -> Result<MessageRecord> {
