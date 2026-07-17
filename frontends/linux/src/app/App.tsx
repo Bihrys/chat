@@ -99,6 +99,7 @@ const EMPTY_REQUESTS: FriendRequestMailbox = { incoming: [], outgoing: [] };
 
 type PrimaryView = "chats" | "contacts";
 type DiscoveryMode = "friend" | "group";
+type WindowChromeMode = "checking" | "custom" | "native";
 type ChatListEntry =
   | { kind: "conversation"; conversation: Conversation; peer?: Account }
   | { kind: "contact"; contact: Account };
@@ -111,6 +112,10 @@ export function App() {
   const [railMenuOpen, setRailMenuOpen] = useState(false);
   const t = translations[locale];
   const tauriRuntime = isTauri();
+  const [windowChromeMode, setWindowChromeMode] = useState<WindowChromeMode>(
+    tauriRuntime ? "checking" : "native",
+  );
+  const customWindowChrome = tauriRuntime && windowChromeMode === "custom";
 
   const [session, setSession] = useState<AuthSession | null>(readStoredSession);
   const [authChecking, setAuthChecking] = useState(session !== null);
@@ -316,6 +321,19 @@ export function App() {
       .then(setBackend)
       .catch(() => setBackend("web"));
   }, []);
+
+  useEffect(() => {
+    if (!tauriRuntime) return;
+
+    void invoke<{ decorated: boolean }>("configure_main_window")
+      .then(({ decorated }) => {
+        setWindowChromeMode(decorated ? "native" : "custom");
+      })
+      .catch(() => {
+        // Never render a second set of controls when decoration detection fails.
+        setWindowChromeMode("native");
+      });
+  }, [tauriRuntime]);
 
   useEffect(() => {
     if (!accessToken || !session) {
@@ -1225,7 +1243,7 @@ export function App() {
   ).length;
 
   return (
-    <main className={`wechat-shell ${tauriRuntime ? "tauri-frameless" : ""}`}>
+    <main className={`wechat-shell ${customWindowChrome ? "tauri-frameless" : ""}`}>
       <aside className="app-rail">
         <button
           className="rail-avatar"
@@ -1354,7 +1372,7 @@ export function App() {
       </aside>
 
       <section className="conversation-pane" ref={conversationPaneRef}>
-        {tauriRuntime && (
+        {customWindowChrome && (
           <>
             {!selectedConversation && (
               <div className="frameless-drag-strip" data-tauri-drag-region />
