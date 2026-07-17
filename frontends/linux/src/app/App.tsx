@@ -940,14 +940,14 @@ export function App() {
     recorder.stop();
   }
 
-  async function openDirectConversation(peerAccountId: string) {
-    if (!accessToken) return;
+  async function openDirectConversation(peerAccountId: string): Promise<Conversation | null> {
+    if (!accessToken) return null;
     const existing = directConversationByPeer.get(peerAccountId);
     if (existing) {
       setSelectedConversationId(existing.conversation_id);
       setSelectedContactId(null);
       setPrimaryView("chats");
-      return;
+      return existing;
     }
     setBusy(true);
     setError(null);
@@ -957,11 +957,21 @@ export function App() {
       setSelectedConversationId(conversation.conversation_id);
       setSelectedContactId(null);
       setPrimaryView("chats");
+      return conversation;
     } catch (reason) {
       reportError(reason);
+      return null;
     } finally {
       setBusy(false);
     }
+  }
+
+  async function startContactCall(peerAccountId: string, media: "audio" | "video") {
+    if (peerCall.call) return;
+    const conversation = await openDirectConversation(peerAccountId);
+    if (!conversation) return;
+    setProfilePopoverAccount(null);
+    await peerCall.startCall(conversation.conversation_id, peerAccountId, media);
   }
 
   function insertEmoji(emoji: string) {
@@ -1773,6 +1783,7 @@ export function App() {
             commonGroups={commonGroups}
             contacts={contacts}
             busy={busy}
+            callBusy={Boolean(peerCall.call)}
             t={t}
             onSaveRemark={(value) => performContactRemark(selectedContact.account_id, value)}
             onSaveTags={(value) => performContactTags(selectedContact.account_id, value)}
@@ -1782,6 +1793,8 @@ export function App() {
             onDelete={() => performDeleteContact(selectedContact.account_id)}
             onRecommend={(recipientId) => performRecommendContact(selectedContact, recipientId)}
             onStartChat={() => void openDirectConversation(selectedContact.account_id)}
+            onStartAudioCall={() => void startContactCall(selectedContact.account_id, "audio")}
+            onStartVideoCall={() => void startContactCall(selectedContact.account_id, "video")}
             onOpenGroup={(conversationId) => {
               setSelectedContactId(null);
               setSelectedConversationId(conversationId);
@@ -1953,7 +1966,7 @@ export function App() {
                 value={draft}
                 onChange={(event) => setDraft(event.target.value)}
                 onPaste={(event) => {
-                  const image = [...event.clipboardData.files].find((file) => file.type.startsWith("image/"));
+                  const image = clipboardImageFile(event.clipboardData);
                   if (image) {
                     event.preventDefault();
                     void handleMediaFile(image, "image");
@@ -2164,6 +2177,7 @@ export function App() {
           commonGroups={profilePopoverGroups}
           contacts={contacts}
           busy={busy}
+          callBusy={Boolean(peerCall.call)}
           t={t}
           onSaveRemark={(value) => performContactRemark(profilePopoverAccount.account_id, value)}
           onSaveTags={(value) => performContactTags(profilePopoverAccount.account_id, value)}
@@ -2176,6 +2190,8 @@ export function App() {
             setProfilePopoverAccount(null);
             void openDirectConversation(profilePopoverAccount.account_id);
           }}
+          onStartAudioCall={() => void startContactCall(profilePopoverAccount.account_id, "audio")}
+          onStartVideoCall={() => void startContactCall(profilePopoverAccount.account_id, "video")}
           onOpenGroup={(conversationId) => {
             setProfilePopoverAccount(null);
             setSelectedConversationId(conversationId);
@@ -3337,6 +3353,34 @@ async function readVideoMetadata(blob: Blob): Promise<{ width?: number; height?:
   });
 }
 
+function clipboardImageFile(data: DataTransfer): File | null {
+  for (const item of Array.from(data.items)) {
+    if (item.kind !== "file" || !item.type.startsWith("image/")) continue;
+    const file = item.getAsFile();
+    if (file) return namedClipboardImage(file);
+  }
+
+  const file = Array.from(data.files).find((candidate) =>
+    candidate.type.startsWith("image/"),
+  );
+  return file ? namedClipboardImage(file) : null;
+}
+
+function namedClipboardImage(file: File): File {
+  if (file.name.trim()) return file;
+  const extension = file.type.includes("jpeg")
+    ? "jpg"
+    : file.type.includes("webp")
+      ? "webp"
+      : file.type.includes("gif")
+        ? "gif"
+        : "png";
+  return new File([file], `clipboard-${Date.now()}.${extension}`, {
+    type: file.type || "image/png",
+    lastModified: Date.now(),
+  });
+}
+
 function emojiStickerBlob(emoji: string): Promise<Blob> {
   return new Promise((resolve, reject) => {
     const canvas = document.createElement("canvas");
@@ -3370,8 +3414,14 @@ function formatRecordingTime(seconds: number) {
 }
 
 function mediaAccessError(reason: unknown, t: Translation) {
-  if (reason instanceof DOMException && ["NotAllowedError", "SecurityError", "NotFoundError"].includes(reason.name)) {
-    return t.mediaPermissionDenied;
+  if (reason instanceof DOMException) {
+    if (["NotAllowedError", "SecurityError"].includes(reason.name)) {
+      return t.mediaPermissionDenied;
+    }
+    if (reason.name === "NotFoundError") return t.mediaDeviceNotFound;
+    if (["NotReadableError", "AbortError"].includes(reason.name)) {
+      return t.mediaDeviceUnavailable;
+    }
   }
   return readableError(reason);
 }

@@ -47,8 +47,44 @@ fn configure_main_window(
     Ok(WindowChromeState { decorated })
 }
 
+#[cfg(target_os = "linux")]
+fn install_linux_media_permission_handler(
+    app: &tauri::App,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tauri::Manager;
+    use webkit2gtk::{prelude::*, UserMediaPermissionRequest};
+
+    let window = app
+        .get_webview_window("main")
+        .ok_or_else(|| std::io::Error::other("main webview window is unavailable"))?;
+
+    window
+        .with_webview(|webview| {
+            webview
+                .inner()
+                .connect_permission_request(|_, request| {
+                    // Only grant microphone/camera capture requests. Other WebKit
+                    // permissions continue through their default deny/prompt path.
+                    if request.is::<UserMediaPermissionRequest>() {
+                        request.allow();
+                        true
+                    } else {
+                        false
+                    }
+                });
+        })?;
+
+    Ok(())
+}
+
 pub fn run() {
     tauri::Builder::default()
+        .setup(|app| {
+            #[cfg(target_os = "linux")]
+            install_linux_media_permission_handler(app)?;
+
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             backend_status,
             configure_main_window,

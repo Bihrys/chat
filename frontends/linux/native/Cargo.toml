@@ -15,6 +15,9 @@ serde_json = "1"
 chat-client-facade = { path = "../../../crates/client/facade" }
 chat-platform-linux = { path = "../../../crates/platform/linux" }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+webkit2gtk = { version = "2.0.2", features = ["v2_8"] }
+
 [lib]
 name = "chat_desktop"
 path = "src/lib.rs"

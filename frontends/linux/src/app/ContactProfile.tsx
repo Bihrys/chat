@@ -18,9 +18,12 @@ type ContactProfileProps = ContactActions & {
   commonGroups: CommonGroup[];
   contacts: Account[];
   busy: boolean;
+  callBusy: boolean;
   t: Translation;
   compact?: boolean;
   onStartChat(): void;
+  onStartAudioCall(): void;
+  onStartVideoCall(): void;
   onOpenGroup(conversationId: string): void;
   onClose?: () => void;
 };
@@ -187,9 +190,28 @@ function ContactProfileCard(props: ContactProfileProps) {
         </div>
       </dl>
 
-      <button className="contact-chat-button" type="button" onClick={props.onStartChat} disabled={props.busy}>
-        {props.t.startChat}
-      </button>
+      <div className="contact-profile-actions" aria-label={props.t.startChat}>
+        <button type="button" onClick={props.onStartChat} disabled={props.busy}>
+          <MessageActionIcon />
+          <span>{props.t.startChat}</span>
+        </button>
+        <button
+          type="button"
+          onClick={props.onStartAudioCall}
+          disabled={props.busy || props.callBusy}
+        >
+          <PhoneActionIcon />
+          <span>{props.t.audioCall}</span>
+        </button>
+        <button
+          type="button"
+          onClick={props.onStartVideoCall}
+          disabled={props.busy || props.callBusy}
+        >
+          <VideoActionIcon />
+          <span>{props.t.videoCall}</span>
+        </button>
+      </div>
 
       {dialog === "identity" && (
         <ProfileDialog title={props.t.setRemarkAndTags} onClose={() => setDialog(null)}>
@@ -277,6 +299,31 @@ function ContactProfileCard(props: ContactProfileProps) {
         </ProfileDialog>
       )}
     </section>
+  );
+}
+
+function MessageActionIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5.4 18.2 3 21l.7-4.3A8 8 0 1 1 5.4 18.2Z" />
+    </svg>
+  );
+}
+
+function PhoneActionIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M6.3 3.6 9 7.8 7.2 9.6c1.3 2.8 3.4 4.9 6.2 6.2l1.8-1.8 4.2 2.7-.7 3.3c-.2.8-.9 1.3-1.7 1.3C9.2 20.7 3.3 14.8 2.7 7c0-.8.5-1.5 1.3-1.7l2.3-.7Z" />
+    </svg>
+  );
+}
+
+function VideoActionIcon() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="6" width="13" height="12" rx="2" />
+      <path d="m16 10 5-3v10l-5-3Z" />
+    </svg>
   );
 }
 

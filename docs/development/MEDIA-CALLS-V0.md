@@ -47,3 +47,10 @@ Do not encrypt only the `body` string. The next phase must replace the V0 payloa
 versioned envelope covering text, media descriptors, stickers, call control, sender device,
 message sequence, replay protection, and group epoch. Media bytes must be encrypted before
 upload and object identifiers must not reveal plaintext metadata.
+
+## Linux desktop integration notes
+
+- The Tauri Linux client installs a narrowly scoped WebKitGTK permission handler for `UserMediaPermissionRequest`; only microphone/camera capture is granted.
+- The contact profile card exposes message, audio-call, and video-call entry points.
+- Clipboard image paste checks both `DataTransfer.items` and `DataTransfer.files`, which is required for WebKitGTK screenshot clipboard payloads.
+- Device capture can still fail when the OS has no usable PipeWire/PulseAudio source or camera device.
