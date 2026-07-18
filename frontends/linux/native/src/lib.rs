@@ -52,7 +52,9 @@ fn install_linux_media_permission_handler(
     app: &tauri::App,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::Manager;
-    use webkit2gtk::{prelude::*, UserMediaPermissionRequest};
+    use webkit2gtk::{
+        glib::prelude::ObjectExt, PermissionRequestExt, UserMediaPermissionRequest, WebViewExt,
+    };
 
     let window = app
         .get_webview_window("main")
