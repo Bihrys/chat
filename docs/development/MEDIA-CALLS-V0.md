@@ -51,6 +51,27 @@ upload and object identifiers must not reveal plaintext metadata.
 ## Linux desktop integration notes
 
 - The Tauri Linux client installs a narrowly scoped WebKitGTK permission handler for `UserMediaPermissionRequest`; only microphone/camera capture is granted.
+- The same native setup explicitly enables WebKitGTK `enable-webrtc`, media-stream, and inline media playback settings so `RTCPeerConnection` is exposed to the frontend.
 - The contact profile card exposes message, audio-call, and video-call entry points.
 - Clipboard image paste checks both `DataTransfer.items` and `DataTransfer.files`, which is required for WebKitGTK screenshot clipboard payloads.
 - Device capture can still fail when the OS has no usable PipeWire/PulseAudio source or camera device.
+
+
+### Linux runtime check
+
+Run the built-in diagnostic before testing calls:
+
+```bash
+cargo xtask linux webrtc-check
+```
+
+It checks the WebKitGTK 4.1 runtime, GStreamer WebRTC plugins, capture
+source plugins, PipeWire, and `/dev/video*` camera nodes. A missing camera node
+does not block audio calls, but it prevents a real video call.
+
+### Contact deletion and retained history
+
+Deleting a contact is separate from deleting the current account's chat history.
+The client can keep the direct conversation visible, or clear it and mark it hidden
+for that account. Re-adding the contact and opening the direct conversation removes
+the hidden marker.

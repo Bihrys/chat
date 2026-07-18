@@ -37,7 +37,7 @@ fn help() {
          infra up|down|status\n  \
          chat up|down|status|smoke\n  \
          services build|start|stop|status|restart [name|all]\n  \
-         linux dev|build|typecheck\n"
+         linux dev|build|typecheck|webrtc-check\n"
     );
 }
 
@@ -100,6 +100,9 @@ fn main() -> ExitCode {
         }
         [cmd, action] if cmd == "linux" && action == "typecheck" => {
             run("pnpm", &["--dir", "frontends/linux", "typecheck"])
+        }
+        [cmd, action] if cmd == "linux" && action == "webrtc-check" => {
+            run("bash", &["scripts/frontend/linux-webrtc-check.sh"])
         }
         _ => {
             help();

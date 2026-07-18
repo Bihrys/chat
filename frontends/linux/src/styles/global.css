@@ -751,6 +751,21 @@ body.composer-resizing .composer-resize-handle::after {
   gap: 4px;
 }
 
+.composer-toolbar-spacer {
+  flex: 1 1 auto;
+}
+
+.composer-call-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.composer-call-actions .composer-tool-button {
+  width: 40px;
+}
+
 .composer-tool-button {
   width: 36px;
   height: 36px;
@@ -1000,6 +1015,13 @@ body.composer-resizing .composer-resize-handle::after {
   border: 1px solid #32764f;
   background: #214c34;
   color: #c3efd4;
+}
+
+.error-banner,
+.notice-banner {
+  animation:
+    notice-pop-in 160ms ease-out,
+    notice-fade-out 220ms ease-in 2.5s forwards;
 }
 
 /* Modal and discovery */
@@ -2453,6 +2475,42 @@ body.composer-resizing .composer-resize-handle::after {
   padding: 16px;
 }
 
+.profile-dialog-intro {
+  margin: 0;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.delete-history-choice {
+  padding: 10px 12px;
+  border: 1px solid var(--border-soft);
+  border-radius: 6px;
+  background: var(--panel);
+}
+
+.profile-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.profile-dialog-actions button {
+  min-width: 88px;
+  height: 38px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.profile-dialog-actions .danger-button {
+  border-color: #9b4a54;
+  background: #5a2a30;
+  color: #ffe1e5;
+}
+
 .profile-dialog label {
   display: grid;
   gap: 7px;
@@ -2775,12 +2833,6 @@ body.composer-resizing .composer-resize-handle::after {
   height: 30px;
 }
 
-.notice-banner {
-  animation:
-    notice-pop-in 160ms ease-out,
-    notice-fade-out 220ms ease-in 2.5s forwards;
-}
-
 @keyframes notice-pop-in {
   from {
     opacity: 0;
@@ -2827,6 +2879,7 @@ body.composer-resizing .composer-resize-handle::after {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .error-banner,
   .notice-banner {
     animation: none;
   }

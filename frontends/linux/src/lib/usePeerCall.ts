@@ -102,7 +102,8 @@ export function usePeerCall({
 
   const buildPeerConnection = useCallback(
     (current: PeerCallState, stream: MediaStream) => {
-      const pc = new RTCPeerConnection({ iceServers: rtcIceServers() });
+      const PeerConnection = resolvePeerConnectionConstructor();
+      const pc = new PeerConnection({ iceServers: rtcIceServers() });
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       pc.onicecandidate = (event) => {
         if (event.candidate) {
@@ -134,9 +135,12 @@ export function usePeerCall({
     if (!navigator.mediaDevices?.getUserMedia) {
       throw new DOMException("Media capture is unavailable", "NotSupportedError");
     }
+
+    // WebKitGTK can reject ideal width/height objects as an invalid constraint.
+    // Let the engine choose its supported format instead.
     return navigator.mediaDevices.getUserMedia({
       audio: true,
-      video: media === "video" ? { width: { ideal: 1280 }, height: { ideal: 720 } } : false,
+      video: media === "video",
     });
   }, []);
 
@@ -332,4 +336,19 @@ function rtcIceServers(): RTCIceServer[] {
   } catch {
     return [];
   }
+}
+
+type PeerConnectionConstructor = new (
+  configuration?: RTCConfiguration,
+) => RTCPeerConnection;
+
+function resolvePeerConnectionConstructor(): PeerConnectionConstructor {
+  const scope = globalThis as typeof globalThis & {
+    webkitRTCPeerConnection?: PeerConnectionConstructor;
+  };
+  const constructor = scope.RTCPeerConnection ?? scope.webkitRTCPeerConnection;
+  if (!constructor) {
+    throw new DOMException("RTCPeerConnection is unavailable", "NotSupportedError");
+  }
+  return constructor;
 }

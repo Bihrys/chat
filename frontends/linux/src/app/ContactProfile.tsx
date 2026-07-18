@@ -9,7 +9,7 @@ type ContactActions = {
   onSetPermission(value: "all" | "chat_only"): Promise<void>;
   onToggleStarred(): Promise<void>;
   onToggleBlocked(): Promise<void>;
-  onDelete(): Promise<void>;
+  onDelete(options: { keepHistory: boolean }): Promise<void>;
   onRecommend(recipientAccountId: string): Promise<void>;
 };
 
@@ -28,7 +28,7 @@ type ContactProfileProps = ContactActions & {
   onClose?: () => void;
 };
 
-type DialogMode = "identity" | "permission" | "recommend" | null;
+type DialogMode = "identity" | "permission" | "recommend" | "delete" | null;
 
 export function ContactProfile(props: ContactProfileProps) {
   return (
@@ -57,6 +57,7 @@ function ContactProfileCard(props: ContactProfileProps) {
     props.account.friend_permission ?? "all",
   );
   const [recommendRecipient, setRecommendRecipient] = useState("");
+  const [keepHistoryOnDelete, setKeepHistoryOnDelete] = useState(true);
 
   useEffect(() => {
     setRemark(props.account.remark_name ?? "");
@@ -64,6 +65,7 @@ function ContactProfileCard(props: ContactProfileProps) {
     setPermission(props.account.friend_permission ?? "all");
     setMenuOpen(false);
     setDialog(null);
+    setKeepHistoryOnDelete(true);
   }, [
     props.account.account_id,
     props.account.friend_permission,
@@ -122,7 +124,7 @@ function ContactProfileCard(props: ContactProfileProps) {
               type="button"
               onClick={() => {
                 setMenuOpen(false);
-                if (window.confirm(props.t.deleteContactConfirm)) void props.onDelete();
+                setDialog("delete");
               }}
             >
               {props.t.deleteContact}
@@ -296,6 +298,56 @@ function ContactProfileCard(props: ContactProfileProps) {
           >
             {props.t.sendContactCard}
           </button>
+        </ProfileDialog>
+      )}
+
+      {dialog === "delete" && (
+        <ProfileDialog title={props.t.deleteContact} onClose={() => setDialog(null)}>
+          <p className="profile-dialog-intro">{props.t.deleteContactConfirm}</p>
+
+          <label className="permission-choice delete-history-choice">
+            <input
+              type="radio"
+              name="delete-history"
+              checked={keepHistoryOnDelete}
+              onChange={() => setKeepHistoryOnDelete(true)}
+            />
+            <span>
+              <strong>{props.t.deleteContactKeepHistory}</strong>
+              <small>{props.t.deleteContactKeepHistoryDescription}</small>
+            </span>
+          </label>
+
+          <label className="permission-choice delete-history-choice">
+            <input
+              type="radio"
+              name="delete-history"
+              checked={!keepHistoryOnDelete}
+              onChange={() => setKeepHistoryOnDelete(false)}
+            />
+            <span>
+              <strong>{props.t.deleteContactRemoveHistory}</strong>
+              <small>{props.t.deleteContactRemoveHistoryDescription}</small>
+            </span>
+          </label>
+
+          <div className="profile-dialog-actions">
+            <button type="button" onClick={() => setDialog(null)}>
+              {props.t.cancel}
+            </button>
+            <button
+              className="danger-button"
+              type="button"
+              disabled={props.busy}
+              onClick={() => {
+                void props
+                  .onDelete({ keepHistory: keepHistoryOnDelete })
+                  .then(() => setDialog(null));
+              }}
+            >
+              {props.t.confirm}
+            </button>
+          </div>
         </ProfileDialog>
       )}
     </section>

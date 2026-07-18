@@ -348,9 +348,11 @@ export async function updateConversationPreferences(
 export async function clearConversationHistory(
   accessToken: string,
   conversationId: string,
+  hideConversation = false,
 ): Promise<void> {
+  const query = hideConversation ? "?hide=true" : "";
   await requestJson<void>(
-    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/history`,
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/history${query}`,
     { method: "DELETE", headers: bearerHeaders(accessToken) },
   );
 }

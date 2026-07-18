@@ -150,6 +150,12 @@ struct UpdateConversationPreferencesRequest {
     is_muted: bool,
 }
 
+#[derive(Debug, Deserialize, Default)]
+struct ClearConversationHistoryQuery {
+    #[serde(default)]
+    hide: bool,
+}
+
 #[derive(Debug, Deserialize)]
 struct WebSocketQuery {
     access_token: String,
@@ -565,12 +571,13 @@ async fn clear_conversation_history(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(conversation_id): Path<Uuid>,
+    Query(query): Query<ClearConversationHistoryQuery>,
 ) -> Result<StatusCode, ApiError> {
     let actor = actor_from_headers(&state, &headers).await?;
     ensure_member(&state, conversation_id, actor).await?;
     state
         .mailbox
-        .clear_conversation_history(conversation_id, actor)
+        .clear_conversation_history(conversation_id, actor, query.hide)
         .await
         .map_err(internal_error)?;
     Ok(StatusCode::NO_CONTENT)

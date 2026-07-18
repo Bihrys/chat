@@ -53,28 +53,36 @@ fn install_linux_media_permission_handler(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use tauri::Manager;
     use webkit2gtk::{
-        glib::prelude::ObjectExt, PermissionRequestExt, UserMediaPermissionRequest, WebViewExt,
+        glib::prelude::ObjectExt, PermissionRequestExt, SettingsExt,
+        UserMediaPermissionRequest, WebViewExt,
     };
 
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| std::io::Error::other("main webview window is unavailable"))?;
 
-    window
-        .with_webview(|webview| {
-            webview
-                .inner()
-                .connect_permission_request(|_, request| {
-                    // Only grant microphone/camera capture requests. Other WebKit
-                    // permissions continue through their default deny/prompt path.
-                    if request.is::<UserMediaPermissionRequest>() {
-                        request.allow();
-                        true
-                    } else {
-                        false
-                    }
-                });
-        })?;
+    window.with_webview(|webview| {
+        let webview = webview.inner();
+
+        // WebKitGTK exposes getUserMedia separately from RTCPeerConnection.
+        // Tauri's default WebView settings can therefore capture media while
+        // leaving the WebRTC constructor unavailable. Enable both explicitly.
+        if let Some(settings) = webview.settings() {
+            // WebKitGTK documents that enabling WebRTC also enables media-stream.
+            settings.set_enable_webrtc(true);
+        }
+
+        webview.connect_permission_request(|_, request| {
+            // Only grant microphone/camera capture requests. Other WebKit
+            // permissions continue through their default deny/prompt path.
+            if request.is::<UserMediaPermissionRequest>() {
+                request.allow();
+                true
+            } else {
+                false
+            }
+        });
+    })?;
 
     Ok(())
 }

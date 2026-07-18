@@ -25,6 +25,9 @@ const CONVERSATION_PREFERENCES_MIGRATION: &str = include_str!(
 );
 const MEDIA_CALLS_MIGRATION: &str =
     include_str!("../../../../infra/native/postgresql/migrations/mailbox/0005_media_calls.sql");
+const HIDDEN_CONVERSATIONS_MIGRATION: &str = include_str!(
+    "../../../../infra/native/postgresql/migrations/mailbox/0006_hidden_conversations.sql"
+);
 
 #[derive(Clone)]
 pub(crate) struct MailboxRepository {
@@ -62,6 +65,10 @@ impl MailboxRepository {
             .execute(&pool)
             .await
             .context("failed to apply media/call migration")?;
+        sqlx::raw_sql(HIDDEN_CONVERSATIONS_MIGRATION)
+            .execute(&pool)
+            .await
+            .context("failed to apply hidden-conversations migration")?;
 
         let media_root = std::env::var_os("CHAT_MEDIA_DIR")
             .map(PathBuf::from)
@@ -133,6 +140,26 @@ impl MailboxRepository {
             .execute(&mut *transaction)
             .await
             .context("failed to initialize direct read state")?;
+
+            sqlx::query(
+                r"
+                INSERT INTO conversation_preferences (
+                    conversation_id,
+                    account_id,
+                    is_pinned,
+                    is_muted,
+                    is_hidden
+                )
+                VALUES ($1, $2, FALSE, FALSE, FALSE)
+                ON CONFLICT (conversation_id, account_id)
+                DO UPDATE SET is_hidden = FALSE, updated_at = now()
+                ",
+            )
+            .bind(actual_conversation_id)
+            .bind(account_id)
+            .execute(&mut *transaction)
+            .await
+            .context("failed to restore direct conversation visibility")?;
         }
         transaction
             .commit()
@@ -198,7 +225,8 @@ impl MailboxRepository {
                 ORDER BY m.message_seq DESC
                 LIMIT 1
             ) last_message ON TRUE
-            WHERE c.member_a = $1 OR c.member_b = $1
+            WHERE (c.member_a = $1 OR c.member_b = $1)
+              AND NOT COALESCE(preferences.is_hidden, FALSE)
             ",
         )
         .bind(actor)
@@ -547,6 +575,7 @@ impl MailboxRepository {
         &self,
         conversation_id: Uuid,
         actor: Uuid,
+        hide_conversation: bool,
     ) -> Result<()> {
         let is_group = self.is_group_conversation(conversation_id).await?;
         let max_seq: i64 = if is_group {
@@ -583,6 +612,29 @@ impl MailboxRepository {
         .execute(&self.pool)
         .await
         .context("failed to clear conversation history")?;
+
+        if hide_conversation {
+            sqlx::query(
+                r"
+                INSERT INTO conversation_preferences (
+                    conversation_id,
+                    account_id,
+                    is_pinned,
+                    is_muted,
+                    is_hidden
+                )
+                VALUES ($1, $2, FALSE, FALSE, TRUE)
+                ON CONFLICT (conversation_id, account_id)
+                DO UPDATE SET is_hidden = TRUE, updated_at = now()
+                ",
+            )
+            .bind(conversation_id)
+            .bind(actor)
+            .execute(&self.pool)
+            .await
+            .context("failed to hide cleared conversation")?;
+        }
+
         Ok(())
     }
 

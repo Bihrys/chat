@@ -235,7 +235,6 @@ export function App() {
   const accountById = useMemo(() => {
     const map = new Map<string, Account>();
     for (const account of knownAccounts) map.set(account.account_id, account);
-    for (const account of contacts) map.set(account.account_id, account);
     for (const request of friendRequests.incoming) {
       map.set(request.peer.account_id, request.peer);
     }
@@ -243,6 +242,12 @@ export function App() {
       map.set(request.peer.account_id, request.peer);
     }
     if (lookupResult) map.set(lookupResult.account_id, lookupResult);
+
+    // Contact records contain local-only fields such as remark_name. Apply them
+    // after request/search records so stale peer snapshots cannot overwrite the
+    // local remark shown in the chat list or conversation header.
+    for (const account of contacts) map.set(account.account_id, account);
+
     if (activeAccount) map.set(activeAccount.account_id, activeAccount);
     return map;
   }, [activeAccount, contacts, friendRequests, knownAccounts, lookupResult]);
@@ -356,6 +361,14 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [notice]);
 
+  useEffect(() => {
+    // Authentication errors remain visible on the login/register screen. The
+    // in-app banner is a transient toast and should not require manual closing.
+    if (!activeAccount || !error) return;
+    const timeout = window.setTimeout(() => setError(null), 3_200);
+    return () => window.clearTimeout(timeout);
+  }, [activeAccount, error]);
+
   const saveSession = useCallback((next: AuthSession) => {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
     setSession(next);
@@ -409,9 +422,9 @@ export function App() {
   const reportError = useCallback(
     (reason: unknown) => {
       if (reason instanceof ApiError && reason.status === 401) clearSession();
-      setError(readableError(reason));
+      setError(uiErrorMessage(reason, t));
     },
-    [clearSession],
+    [clearSession, t],
   );
 
   const peerCall = usePeerCall({
@@ -1359,31 +1372,66 @@ export function App() {
     await refreshConversations(accessToken);
   }
 
-  async function performDeleteContact(accountId: string) {
+  async function performDeleteContact(
+    accountId: string,
+    options: { keepHistory: boolean },
+  ) {
     if (!accessToken) return;
     setBusy(true);
     try {
-      await deleteContact(accessToken, accountId);
-      setContacts((current) => current.filter((item) => item.account_id !== accountId));
-      setKnownAccounts((current) => current.filter((item) => item.account_id !== accountId));
-      if (selectedContactId === accountId) {
-        setSelectedContactId(null);
-        setSelectedContact(null);
-      }
-      if (profilePopoverAccount?.account_id === accountId) {
-        setProfilePopoverAccount(null);
-      }
       const directConversation = conversations.find(
         (conversation) =>
           conversation.kind === "direct" && conversation.peer_account_id === accountId,
       );
-      if (directConversation?.conversation_id === selectedConversationId) {
+
+      await deleteContact(accessToken, accountId);
+
+      if (!options.keepHistory && directConversation) {
+        await clearConversationHistory(accessToken, directConversation.conversation_id, true);
+      }
+
+      setContacts((current) => current.filter((item) => item.account_id !== accountId));
+
+      // Retain the peer snapshot only when history is retained. It is needed to
+      // keep the existing conversation title/avatar readable after the contact
+      // relationship has been removed.
+      if (!options.keepHistory) {
+        setKnownAccounts((current) =>
+          current.filter((item) => item.account_id !== accountId),
+        );
+      }
+
+      if (selectedContactId === accountId) {
+        setSelectedContactId(null);
+        setSelectedContact(null);
+        setPrimaryView("chats");
+
+        if (options.keepHistory && directConversation) {
+          setSelectedConversationId(directConversation.conversation_id);
+        }
+      }
+
+      if (profilePopoverAccount?.account_id === accountId) {
+        setProfilePopoverAccount(null);
+      }
+
+      if (
+        !options.keepHistory
+        && directConversation?.conversation_id === selectedConversationId
+      ) {
         setSelectedConversationId(null);
         setMessages([]);
+        setMessageSearch("");
+        setMessageSearchResults(null);
       }
+
       await refreshSocial(accessToken);
       await refreshConversations(accessToken);
-      setNotice(t.contactDeleted);
+      setNotice(
+        options.keepHistory
+          ? t.contactDeleted
+          : `${t.contactDeleted} ${t.chatHistoryCleared}`,
+      );
     } catch (reason) {
       reportError(reason);
       throw reason;
@@ -1790,7 +1838,7 @@ export function App() {
             onSetPermission={(value) => performContactPermission(selectedContact.account_id, value)}
             onToggleStarred={() => performContactStar(selectedContact.account_id)}
             onToggleBlocked={() => performContactBlock(selectedContact.account_id)}
-            onDelete={() => performDeleteContact(selectedContact.account_id)}
+            onDelete={(options) => performDeleteContact(selectedContact.account_id, options)}
             onRecommend={(recipientId) => performRecommendContact(selectedContact, recipientId)}
             onStartChat={() => void openDirectConversation(selectedContact.account_id)}
             onStartAudioCall={() => void startContactCall(selectedContact.account_id, "audio")}
@@ -1812,38 +1860,6 @@ export function App() {
                 </h1>
               </div>
               <div className="conversation-header-actions">
-                {selectedConversation.kind === "direct" && selectedConversation.peer_account_id && (
-                  <>
-                    <button
-                      className="header-icon-button"
-                      type="button"
-                      title={t.audioCall}
-                      aria-label={t.audioCall}
-                      disabled={Boolean(peerCall.call)}
-                      onClick={() => void peerCall.startCall(
-                        selectedConversation.conversation_id,
-                        selectedConversation.peer_account_id!,
-                        "audio",
-                      )}
-                    >
-                      <PhoneIcon />
-                    </button>
-                    <button
-                      className="header-icon-button"
-                      type="button"
-                      title={t.videoCall}
-                      aria-label={t.videoCall}
-                      disabled={Boolean(peerCall.call)}
-                      onClick={() => void peerCall.startCall(
-                        selectedConversation.conversation_id,
-                        selectedConversation.peer_account_id!,
-                        "video",
-                      )}
-                    >
-                      <CameraIcon />
-                    </button>
-                  </>
-                )}
                 <button
                   className="header-text-button"
                   type="button"
@@ -2024,6 +2040,39 @@ export function App() {
                     <button type="button" onClick={() => stopVoiceRecording(true)}>×</button>
                   </span>
                 )}
+                <span className="composer-toolbar-spacer" aria-hidden="true" />
+                {selectedConversation.kind === "direct" && selectedConversation.peer_account_id && (
+                  <span className="composer-call-actions">
+                    <button
+                      className="composer-tool-button"
+                      type="button"
+                      title={t.audioCall}
+                      aria-label={t.audioCall}
+                      disabled={Boolean(peerCall.call)}
+                      onClick={() => void peerCall.startCall(
+                        selectedConversation.conversation_id,
+                        selectedConversation.peer_account_id!,
+                        "audio",
+                      )}
+                    >
+                      <PhoneIcon />
+                    </button>
+                    <button
+                      className="composer-tool-button"
+                      type="button"
+                      title={t.videoCall}
+                      aria-label={t.videoCall}
+                      disabled={Boolean(peerCall.call)}
+                      onClick={() => void peerCall.startCall(
+                        selectedConversation.conversation_id,
+                        selectedConversation.peer_account_id!,
+                        "video",
+                      )}
+                    >
+                      <CameraIcon />
+                    </button>
+                  </span>
+                )}
                 {mediaUploading && <span className="media-uploading">{t.pleaseWait}</span>}
                 {emojiPickerOpen && (
                   <div
@@ -2184,7 +2233,7 @@ export function App() {
           onSetPermission={(value) => performContactPermission(profilePopoverAccount.account_id, value)}
           onToggleStarred={() => performContactStar(profilePopoverAccount.account_id)}
           onToggleBlocked={() => performContactBlock(profilePopoverAccount.account_id)}
-          onDelete={() => performDeleteContact(profilePopoverAccount.account_id)}
+          onDelete={(options) => performDeleteContact(profilePopoverAccount.account_id, options)}
           onRecommend={(recipientId) => performRecommendContact(profilePopoverAccount, recipientId)}
           onStartChat={() => {
             setProfilePopoverAccount(null);
@@ -3414,16 +3463,7 @@ function formatRecordingTime(seconds: number) {
 }
 
 function mediaAccessError(reason: unknown, t: Translation) {
-  if (reason instanceof DOMException) {
-    if (["NotAllowedError", "SecurityError"].includes(reason.name)) {
-      return t.mediaPermissionDenied;
-    }
-    if (reason.name === "NotFoundError") return t.mediaDeviceNotFound;
-    if (["NotReadableError", "AbortError"].includes(reason.name)) {
-      return t.mediaDeviceUnavailable;
-    }
-  }
-  return readableError(reason);
+  return uiErrorMessage(reason, t);
 }
 
 function readStoredSession(): AuthSession | null {
@@ -3534,6 +3574,33 @@ function readableError(reason: unknown): string {
   if (reason instanceof ApiError) return `${reason.message} (${reason.code})`;
   if (reason instanceof Error) return reason.message;
   return String(reason);
+}
+
+function uiErrorMessage(reason: unknown, t: Translation): string {
+  if (reason instanceof DOMException) {
+    if (["NotAllowedError", "SecurityError"].includes(reason.name)) {
+      return t.mediaPermissionDenied;
+    }
+    if (reason.name === "NotFoundError") return t.mediaDeviceNotFound;
+    if (["NotReadableError", "AbortError"].includes(reason.name)) {
+      return t.mediaDeviceUnavailable;
+    }
+    if (["NotSupportedError", "TypeError"].includes(reason.name)) {
+      return t.unsupportedCall;
+    }
+    if (["OverconstrainedError", "ConstraintError"].includes(reason.name)) {
+      return t.mediaDeviceUnavailable;
+    }
+  }
+
+  if (reason instanceof Error) {
+    if (/RTCPeerConnection|WebRTC/i.test(reason.message)) return t.unsupportedCall;
+    if (/invalid constraint|overconstrained/i.test(reason.message)) {
+      return t.mediaDeviceUnavailable;
+    }
+  }
+
+  return readableError(reason);
 }
 
 function messagePreview(message: ChatMessage | null, t: Translation) {
