@@ -535,6 +535,20 @@ export async function sendMessage(
   );
 }
 
+export async function recallMessage(
+  accessToken: string,
+  conversationId: string,
+  messageId: string,
+): Promise<ChatMessage> {
+  return requestJson<ChatMessage>(
+    `${MAILBOX_SERVICE_URL}/v1/conversations/${conversationId}/messages/${messageId}/recall`,
+    {
+      method: "POST",
+      headers: bearerHeaders(accessToken),
+    },
+  );
+}
+
 export async function uploadMedia(
   accessToken: string,
   conversationId: string,

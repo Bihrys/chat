@@ -18,7 +18,7 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use tokio::sync::{RwLock, broadcast};
 use uuid::Uuid;
 
@@ -43,6 +43,7 @@ const MAX_HISTORY_LIMIT: u16 = 200;
 const MAX_IMAGE_BYTES: usize = 25 * 1024 * 1024;
 const MAX_MEDIA_BYTES: usize = 128 * 1024 * 1024;
 const MAX_CALL_SIGNAL_BYTES: usize = 128 * 1024;
+const MESSAGE_RECALL_WINDOW_SECONDS: i64 = 120;
 
 #[derive(Clone)]
 pub(crate) struct AppState {
@@ -283,6 +284,10 @@ pub(crate) fn router(state: AppState) -> Router {
         .route(
             "/v1/conversations/{conversation_id}/messages/search",
             get(search_messages),
+        )
+        .route(
+            "/v1/conversations/{conversation_id}/messages/{message_id}/recall",
+            post(recall_message),
         )
         .route(
             "/v1/conversations/{conversation_id}/preferences",
@@ -544,6 +549,64 @@ async fn create_message(
         state.events.publish(member, event.clone()).await;
     }
     Ok((StatusCode::CREATED, Json(message_wire)))
+}
+
+async fn recall_message(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path((conversation_id, message_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<MessageWire>, ApiError> {
+    let actor = actor_from_headers(&state, &headers).await?;
+    ensure_member(&state, conversation_id, actor).await?;
+
+    let existing = state
+        .mailbox
+        .get_message(conversation_id, message_id)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| ApiError::not_found("message_not_found", "message does not exist"))?;
+
+    if existing.sender_account_id != actor {
+        return Err(ApiError::forbidden("only the sender can recall a message"));
+    }
+    if existing.payload_format == 3 {
+        return Err(ApiError::conflict(
+            "message_already_recalled",
+            "message has already been recalled",
+        ));
+    }
+    if OffsetDateTime::now_utc() - existing.created_at
+        > Duration::seconds(MESSAGE_RECALL_WINDOW_SECONDS)
+    {
+        return Err(ApiError::conflict(
+            "message_recall_expired",
+            "messages can only be recalled within two minutes",
+        ));
+    }
+
+    let recalled = state
+        .mailbox
+        .recall_message(conversation_id, message_id, actor)
+        .await
+        .map_err(internal_error)?
+        .ok_or_else(|| {
+            ApiError::conflict("message_recall_failed", "message could not be recalled")
+        })?;
+
+    let message_wire = message_to_wire(recalled);
+    let event = ServerEvent::MessageRecalled {
+        message: message_wire.clone(),
+    };
+    let members = state
+        .mailbox
+        .conversation_members(conversation_id)
+        .await
+        .map_err(internal_error)?;
+    for member in members {
+        state.events.publish(member, event.clone()).await;
+    }
+
+    Ok(Json(message_wire))
 }
 
 async fn update_conversation_preferences(
@@ -1257,6 +1320,7 @@ fn payload_format_name(payload_format: i16) -> &'static str {
         0 => "plaintext_dev_v0",
         1 => "media_v0",
         2 => "sticker_v0",
+        3 => "recalled_v0",
         _ => "unknown",
     }
 }

@@ -19,6 +19,7 @@ type ContactProfileProps = ContactActions & {
   contacts: Account[];
   busy: boolean;
   callBusy: boolean;
+  cameraAvailable: boolean | null;
   t: Translation;
   compact?: boolean;
   onStartChat(): void;
@@ -207,8 +208,9 @@ function ContactProfileCard(props: ContactProfileProps) {
         </button>
         <button
           type="button"
+          title={props.cameraAvailable === false ? props.t.cameraDeviceNotFound : props.t.videoCall}
           onClick={props.onStartVideoCall}
-          disabled={props.busy || props.callBusy}
+          disabled={props.busy || props.callBusy || props.cameraAvailable === false}
         >
           <VideoActionIcon />
           <span>{props.t.videoCall}</span>

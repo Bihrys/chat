@@ -657,6 +657,119 @@ impl MailboxRepository {
         .context("failed to resolve direct conversation peer")
     }
 
+    pub(crate) async fn get_message(
+        &self,
+        conversation_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<MessageRecord>> {
+        let is_group = self.is_group_conversation(conversation_id).await?;
+        let row = if is_group {
+            sqlx::query(
+                r"
+                SELECT message_seq,
+                       message_id,
+                       conversation_id,
+                       sender_account_id,
+                       client_message_id,
+                       payload_format,
+                       body,
+                       created_at
+                FROM group_messages
+                WHERE conversation_id = $1 AND message_id = $2
+                ",
+            )
+            .bind(conversation_id)
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await
+        } else {
+            sqlx::query(
+                r"
+                SELECT message_seq,
+                       message_id,
+                       conversation_id,
+                       sender_account_id,
+                       client_message_id,
+                       payload_format,
+                       body,
+                       created_at
+                FROM messages
+                WHERE conversation_id = $1 AND message_id = $2
+                ",
+            )
+            .bind(conversation_id)
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await
+        }
+        .context("failed to load message")?;
+
+        row.map(row_to_message).transpose()
+    }
+
+    pub(crate) async fn recall_message(
+        &self,
+        conversation_id: Uuid,
+        message_id: Uuid,
+        sender_account_id: Uuid,
+    ) -> Result<Option<MessageRecord>> {
+        let is_group = self.is_group_conversation(conversation_id).await?;
+        let row = if is_group {
+            sqlx::query(
+                r"
+                UPDATE group_messages
+                SET payload_format = 3,
+                    body = '[[recalled:v1]]'
+                WHERE conversation_id = $1
+                  AND message_id = $2
+                  AND sender_account_id = $3
+                  AND payload_format <> 3
+                RETURNING message_seq,
+                          message_id,
+                          conversation_id,
+                          sender_account_id,
+                          client_message_id,
+                          payload_format,
+                          body,
+                          created_at
+                ",
+            )
+            .bind(conversation_id)
+            .bind(message_id)
+            .bind(sender_account_id)
+            .fetch_optional(&self.pool)
+            .await
+        } else {
+            sqlx::query(
+                r"
+                UPDATE messages
+                SET payload_format = 3,
+                    body = '[[recalled:v1]]'
+                WHERE conversation_id = $1
+                  AND message_id = $2
+                  AND sender_account_id = $3
+                  AND payload_format <> 3
+                RETURNING message_seq,
+                          message_id,
+                          conversation_id,
+                          sender_account_id,
+                          client_message_id,
+                          payload_format,
+                          body,
+                          created_at
+                ",
+            )
+            .bind(conversation_id)
+            .bind(message_id)
+            .bind(sender_account_id)
+            .fetch_optional(&self.pool)
+            .await
+        }
+        .context("failed to recall message")?;
+
+        row.map(row_to_message).transpose()
+    }
+
     pub(crate) async fn insert_message(
         &self,
         conversation_id: Uuid,

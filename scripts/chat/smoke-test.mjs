@@ -58,7 +58,7 @@ function waitForEvent(socket, predicate, timeoutMs = 5_000) {
   });
 }
 
-console.log("[1/21] Registering Alice, Bob, and Carol...");
+console.log("[1/22] Registering Alice, Bob, and Carol...");
 const aliceSession = await register(`alice_${stamp}`, "Alice Smoke Test");
 const bobSession = await register(`bob_${stamp}`, "Bob Smoke Test");
 const carolSession = await register(`carol_${stamp}`, "Carol Smoke Test");
@@ -67,14 +67,14 @@ const bob = bobSession.account;
 const carol = carolSession.account;
 assert(alice.chat_id && bob.chat_id && carol.chat_id, "public chat IDs were not generated");
 
-console.log("[2/21] Looking Bob up by exact Chat ID...");
+console.log("[2/22] Looking Bob up by exact Chat ID...");
 const foundBob = await json(
   `${accountBase}/v1/accounts/lookup?identifier=${encodeURIComponent(bob.chat_id)}`,
   { headers: authorized(aliceSession.access_token, false) },
 );
 assert(foundBob.account_id === bob.account_id, "exact Chat ID lookup failed");
 
-console.log("[3/21] Sending a friend request...");
+console.log("[3/22] Sending a friend request...");
 await json(`${accountBase}/v1/friend-requests`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
@@ -84,7 +84,7 @@ await json(`${accountBase}/v1/friend-requests`, {
   }),
 });
 
-console.log("[4/21] Bob accepts the request...");
+console.log("[4/22] Bob accepts the request...");
 const bobRequests = await json(`${accountBase}/v1/friend-requests`, {
   headers: authorized(bobSession.access_token, false),
 });
@@ -99,7 +99,7 @@ await json(`${accountBase}/v1/friend-requests/${incoming.request_id}/accept`, {
   body: "{}",
 });
 
-console.log("[5/21] Updating Alice's avatar profile...");
+console.log("[5/22] Updating Alice's avatar profile...");
 const avatarDataUrl = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
 const aliceWithAvatar = await json(`${accountBase}/v1/profile/avatar`, {
   method: "PATCH",
@@ -108,7 +108,7 @@ const aliceWithAvatar = await json(`${accountBase}/v1/profile/avatar`, {
 });
 assert(aliceWithAvatar.avatar_data_url === avatarDataUrl, "avatar update failed");
 
-console.log("[6/21] Persisting nine-level UI preferences...");
+console.log("[6/22] Persisting nine-level UI preferences...");
 const uiPreferences = await json(`${accountBase}/v1/profile/ui-preferences`, {
   method: "PATCH",
   headers: authorized(aliceSession.access_token),
@@ -120,7 +120,7 @@ const storedUiPreferences = await json(`${accountBase}/v1/profile/ui-preferences
 });
 assert(storedUiPreferences.theme === "light", "UI preferences were not persisted");
 
-console.log("[7/21] Saving and reading a contact remark...");
+console.log("[7/22] Saving and reading a contact remark...");
 const bobRemark = `Bob Remark ${stamp}`;
 await json(`${accountBase}/v1/contacts/${bob.account_id}`, {
   method: "PATCH",
@@ -151,14 +151,14 @@ assert(starredBob.tags === bobTags, "contact tags update failed");
 assert(starredBob.friend_permission === "chat_only", "friend permission update failed");
 assert(starredBob.is_starred === true, "starred contact update failed");
 
-console.log("[8/21] Creating a direct conversation between contacts...");
+console.log("[8/22] Creating a direct conversation between contacts...");
 const conversation = await json(`${mailboxBase}/v1/conversations/direct`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
   body: JSON.stringify({ peer_account_id: bob.account_id }),
 });
 
-console.log("[9/21] Connecting Bob's authenticated realtime WebSocket...");
+console.log("[9/22] Connecting Bob's authenticated realtime WebSocket...");
 const socket = new WebSocket(
   `${mailboxWs}/v1/ws?access_token=${encodeURIComponent(bobSession.access_token)}`,
 );
@@ -182,7 +182,7 @@ await new Promise((resolve, reject) => {
   );
 });
 
-console.log("[10/21] Sending and receiving a direct message...");
+console.log("[10/22] Sending and receiving a direct message...");
 const directClientId = crypto.randomUUID();
 const directEvent = waitForEvent(
   socket,
@@ -206,7 +206,43 @@ assert(
   "direct realtime event mismatch",
 );
 
-console.log("[11/21] Uploading, sending, downloading, and receiving an image message...");
+console.log("[11/22] Recalling a message within two minutes...");
+const recallClientId = crypto.randomUUID();
+const recallCreatedEvent = waitForEvent(
+  socket,
+  (event) =>
+    event.type === "message_created"
+    && event.payload?.message?.client_message_id === recallClientId,
+);
+const recallCandidate = await json(
+  `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages`,
+  {
+    method: "POST",
+    headers: authorized(aliceSession.access_token),
+    body: JSON.stringify({
+      client_message_id: recallClientId,
+      body: `recall me ${stamp}`,
+    }),
+  },
+);
+await recallCreatedEvent;
+const recallEvent = waitForEvent(
+  socket,
+  (event) =>
+    event.type === "message_recalled"
+    && event.payload?.message?.message_id === recallCandidate.message_id,
+);
+const recalledMessage = await json(
+  `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages/${recallCandidate.message_id}/recall`,
+  {
+    method: "POST",
+    headers: authorized(aliceSession.access_token, false),
+  },
+);
+assert(recalledMessage.payload_format === "recalled_v0", "recall response format mismatch");
+assert((await recallEvent).payload.message.payload_format === "recalled_v0", "recall realtime event mismatch");
+
+console.log("[12/22] Uploading, sending, downloading, and receiving an image message...");
 const pngBytes = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=", "base64");
 const mediaObject = await json(
   `${mailboxBase}/v1/conversations/${conversation.conversation_id}/media?kind=image&file_name=smoke.png`,
@@ -250,7 +286,7 @@ const downloadedMedia = await fetch(`${mailboxBase}/v1/media/${mediaObject.objec
 assert(downloadedMedia.ok, "media download failed");
 assert((await downloadedMedia.arrayBuffer()).byteLength === pngBytes.byteLength, "media download length mismatch");
 
-console.log("[12/21] Relaying an authenticated audio-call offer over WebSocket...");
+console.log("[13/22] Relaying an authenticated audio-call offer over WebSocket...");
 const callId = crypto.randomUUID();
 const callEvent = waitForEvent(
   socket,
@@ -271,7 +307,7 @@ await json(`${mailboxBase}/v1/calls/signals`, {
 const relayedCall = await callEvent;
 assert(relayedCall.payload.signal.from_account_id === alice.account_id, "call signal sender mismatch");
 
-console.log("[13/21] Verifying direct history and unread state...");
+console.log("[14/22] Verifying direct history and unread state...");
 const history = await json(
   `${mailboxBase}/v1/conversations/${conversation.conversation_id}/messages?limit=200`,
   { headers: authorized(bobSession.access_token, false) },
@@ -311,7 +347,7 @@ const clearedHistory = await json(
 );
 assert(clearedHistory.length === 0, "per-account chat history clear failed");
 
-console.log("[14/21] Creating a group with Bob as an initial member...");
+console.log("[15/22] Creating a group with Bob as an initial member...");
 const group = await json(`${mailboxBase}/v1/groups`, {
   method: "POST",
   headers: authorized(aliceSession.access_token),
@@ -323,7 +359,7 @@ const group = await json(`${mailboxBase}/v1/groups`, {
 assert(group.group_code?.startsWith("G"), "group code was not generated");
 assert(group.actor_role === "owner", "creator is not the group owner");
 
-console.log("[15/21] Verifying common-group discovery for contacts...");
+console.log("[16/22] Verifying common-group discovery for contacts...");
 const commonGroups = await json(
   `${mailboxBase}/v1/contacts/${bob.account_id}/common-groups`,
   { headers: authorized(aliceSession.access_token, false) },
@@ -333,7 +369,7 @@ assert(
   "new group was not returned as a common group",
 );
 
-console.log("[16/21] Looking the group up by exact Group ID...");
+console.log("[17/22] Looking the group up by exact Group ID...");
 const discoveredGroup = await json(
   `${mailboxBase}/v1/groups/lookup?identifier=${encodeURIComponent(group.group_code)}`,
   { headers: authorized(carolSession.access_token, false) },
@@ -341,7 +377,7 @@ const discoveredGroup = await json(
 assert(discoveredGroup.group_id === group.group_id, "exact Group ID lookup failed");
 assert(discoveredGroup.actor_role === null, "Carol should not already be a member");
 
-console.log("[17/21] Carol sends a moderated group join request...");
+console.log("[18/22] Carol sends a moderated group join request...");
 await json(`${mailboxBase}/v1/groups/${group.group_id}/join-requests`, {
   method: "POST",
   headers: authorized(carolSession.access_token),
@@ -356,7 +392,7 @@ assert(
   "Carol's group join request was not marked pending",
 );
 
-console.log("[18/21] Alice reviews and accepts Carol's join request...");
+console.log("[19/22] Alice reviews and accepts Carol's join request...");
 const groupRequests = await json(
   `${mailboxBase}/v1/groups/${group.group_id}/join-requests`,
   { headers: authorized(aliceSession.access_token, false) },
@@ -374,7 +410,7 @@ await json(
   },
 );
 
-console.log("[19/21] Verifying Carol is now a group member...");
+console.log("[20/22] Verifying Carol is now a group member...");
 const carolGroup = await json(`${mailboxBase}/v1/groups/${group.group_id}`, {
   headers: authorized(carolSession.access_token, false),
 });
@@ -388,7 +424,7 @@ assert(
   "approved group did not appear in Carol's conversations",
 );
 
-console.log("[20/21] Sending and receiving a group message...");
+console.log("[21/22] Sending and receiving a group message...");
 const groupClientId = crypto.randomUUID();
 const groupEvent = waitForEvent(
   socket,
@@ -447,7 +483,7 @@ assert(
   "contact deletion failed",
 );
 
-console.log("[21/21] Contacts, nine-level preferences, media transfer, call signaling, direct chat, Group ID search, join approval, and group chat passed.");
+console.log("[22/22] Contacts, message recall, nine-level preferences, media transfer, call signaling, direct chat, Group ID search, join approval, and group chat passed.");
 console.log(
   JSON.stringify(
     {

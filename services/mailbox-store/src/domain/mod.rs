@@ -246,6 +246,9 @@ pub(crate) enum ServerEvent {
     MessageCreated {
         message: MessageWire,
     },
+    MessageRecalled {
+        message: MessageWire,
+    },
     CallSignal {
         signal: CallSignalWire,
     },

@@ -35,6 +35,7 @@ import {
   lookupGroup,
   markConversationRead,
   registerAccount,
+  recallMessage,
   removeGroupMember,
   requestToJoinGroup,
   respondFriendRequest,
@@ -131,6 +132,7 @@ const BUILTIN_STICKERS = ["😂", "😭", "😍", "😡", "🥺", "🤣", "😎"
 type PrimaryView = "chats" | "contacts";
 type DiscoveryMode = "friend" | "group";
 type WindowChromeMode = "checking" | "custom" | "native";
+type MessageContextMenu = { message: ChatMessage; x: number; y: number };
 type ChatListEntry =
   | { kind: "conversation"; conversation: Conversation; peer?: Account }
   | { kind: "contact"; contact: Account };
@@ -208,6 +210,7 @@ export function App() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  const [messageContextMenu, setMessageContextMenu] = useState<MessageContextMenu | null>(null);
 
   const [discoveryOpen, setDiscoveryOpen] = useState(false);
   const [discoveryMode, setDiscoveryMode] = useState<DiscoveryMode>("friend");
@@ -369,6 +372,39 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [activeAccount, error]);
 
+  useEffect(() => {
+    const restrictNativeContextMenu = (event: MouseEvent) => {
+      const target = event.target;
+      if (
+        target instanceof Element
+        && target.closest("input, textarea, [contenteditable='true'], [data-native-context-menu='true']")
+      ) {
+        return;
+      }
+      event.preventDefault();
+    };
+    document.addEventListener("contextmenu", restrictNativeContextMenu, { capture: true });
+    return () => document.removeEventListener("contextmenu", restrictNativeContextMenu, { capture: true });
+  }, []);
+
+  useEffect(() => {
+    if (!messageContextMenu) return;
+    const close = () => setMessageContextMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("pointerdown", close);
+    window.addEventListener("blur", close);
+    window.addEventListener("scroll", close, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("pointerdown", close);
+      window.removeEventListener("blur", close);
+      window.removeEventListener("scroll", close, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [messageContextMenu]);
+
   const saveSession = useCallback((next: AuthSession) => {
     localStorage.setItem(AUTH_SESSION_KEY, JSON.stringify(next));
     setSession(next);
@@ -439,12 +475,13 @@ export function App() {
 
   const appendMessage = useCallback((incoming: ChatMessage) => {
     setMessages((current) => {
-      if (current.some((message) => message.message_id === incoming.message_id)) {
-        return current;
-      }
-      return [...current, incoming].sort(
-        (left, right) => left.message_seq - right.message_seq,
+      const existingIndex = current.findIndex(
+        (message) => message.message_id === incoming.message_id,
       );
+      const next = existingIndex >= 0
+        ? current.map((message, index) => (index === existingIndex ? incoming : message))
+        : [...current, incoming];
+      return next.sort((left, right) => left.message_seq - right.message_seq);
     });
   }, []);
 
@@ -524,6 +561,7 @@ export function App() {
     setProfilePopoverGroups([]);
     setMessageSearch("");
     setMessageSearchResults(null);
+    setMessageContextMenu(null);
   }, [selectedConversationId, primaryView]);
 
   useEffect(() => {
@@ -981,10 +1019,39 @@ export function App() {
 
   async function startContactCall(peerAccountId: string, media: "audio" | "video") {
     if (peerCall.call) return;
+    if (media === "video" && peerCall.cameraAvailable === false) {
+      setError(t.cameraDeviceNotFound);
+      return;
+    }
     const conversation = await openDirectConversation(peerAccountId);
     if (!conversation) return;
     setProfilePopoverAccount(null);
     await peerCall.startCall(conversation.conversation_id, peerAccountId, media);
+  }
+
+  async function performRecallMessage(message: ChatMessage) {
+    if (!accessToken || message.payload_format === "recalled_v0") return;
+    setMessageContextMenu(null);
+    if (!canRecallMessage(message, activeAccount?.account_id ?? "")) {
+      setError(t.messageRecallExpired);
+      return;
+    }
+    try {
+      const recalled = await recallMessage(
+        accessToken,
+        message.conversation_id,
+        message.message_id,
+      );
+      appendMessage(recalled);
+      await refreshConversations(accessToken);
+      setNotice(t.messageRecallSucceeded);
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.code === "message_recall_expired") {
+        setError(t.messageRecallExpired);
+        return;
+      }
+      reportError(reason);
+    }
   }
 
   function insertEmoji(emoji: string) {
@@ -1832,6 +1899,7 @@ export function App() {
             contacts={contacts}
             busy={busy}
             callBusy={Boolean(peerCall.call)}
+            cameraAvailable={peerCall.cameraAvailable}
             t={t}
             onSaveRemark={(value) => performContactRemark(selectedContact.account_id, value)}
             onSaveTags={(value) => performContactTags(selectedContact.account_id, value)}
@@ -1889,10 +1957,27 @@ export function App() {
                   visibleMessages.map((message) => {
                     const sender = accountById.get(message.sender_account_id);
                     const mine = message.sender_account_id === activeAccount.account_id;
+                    if (message.payload_format === "recalled_v0") {
+                      return (
+                        <div key={message.message_id} className="message-recalled-row">
+                          <span>{mine ? t.messageRecalledSelf : t.messageRecalledOther}</span>
+                        </div>
+                      );
+                    }
                     return (
                       <div
                         key={message.message_id}
                         className={`message-row ${mine ? "mine" : ""}`}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          if (!canRecallMessage(message, activeAccount.account_id)) return;
+                          setMessageContextMenu({
+                            message,
+                            x: Math.min(event.clientX, window.innerWidth - 132),
+                            y: Math.min(event.clientY, window.innerHeight - 56),
+                          });
+                        }}
                       >
                         {!mine && (
                           <button
@@ -2060,9 +2145,9 @@ export function App() {
                     <button
                       className="composer-tool-button"
                       type="button"
-                      title={t.videoCall}
+                      title={peerCall.cameraAvailable === false ? t.cameraDeviceNotFound : t.videoCall}
                       aria-label={t.videoCall}
-                      disabled={Boolean(peerCall.call)}
+                      disabled={Boolean(peerCall.call) || peerCall.cameraAvailable === false}
                       onClick={() => void peerCall.startCall(
                         selectedConversation.conversation_id,
                         selectedConversation.peer_account_id!,
@@ -2188,6 +2273,24 @@ export function App() {
         )}
       </section>
 
+      {messageContextMenu && (
+        <div
+          className="message-context-menu"
+          role="menu"
+          style={{ left: messageContextMenu.x, top: messageContextMenu.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+          onContextMenu={(event) => event.preventDefault()}
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => void performRecallMessage(messageContextMenu.message)}
+          >
+            {t.recallMessage}
+          </button>
+        </div>
+      )}
+
       <SettingsPanel
         open={settingsOpen}
         account={activeAccount}
@@ -2227,6 +2330,7 @@ export function App() {
           contacts={contacts}
           busy={busy}
           callBusy={Boolean(peerCall.call)}
+          cameraAvailable={peerCall.cameraAvailable}
           t={t}
           onSaveRemark={(value) => performContactRemark(profilePopoverAccount.account_id, value)}
           onSaveTags={(value) => performContactTags(profilePopoverAccount.account_id, value)}
@@ -3258,11 +3362,14 @@ async function handleServerEvent(
     }
     return;
   }
-  if (event.type === "message_created") {
+  if (event.type === "message_created" || event.type === "message_recalled") {
     const message = event.payload.message;
     if (message.conversation_id === selectedConversationId) {
       appendMessage(message);
-      if (message.sender_account_id !== activeAccountId) {
+      if (
+        event.type === "message_created"
+        && message.sender_account_id !== activeAccountId
+      ) {
         await markConversationRead(accessToken, message.conversation_id);
       }
     }
@@ -3578,6 +3685,14 @@ function readableError(reason: unknown): string {
 
 function uiErrorMessage(reason: unknown, t: Translation): string {
   if (reason instanceof DOMException) {
+    if (reason.message === "camera-device-not-found") return t.cameraDeviceNotFound;
+    if (reason.message === "microphone-device-not-found") return t.microphoneDeviceNotFound;
+    if (
+      reason.message === "audio-webrtc-runtime-unavailable"
+      || reason.message === "video-webrtc-runtime-unavailable"
+    ) {
+      return t.webrtcRuntimeMissing;
+    }
     if (["NotAllowedError", "SecurityError"].includes(reason.name)) {
       return t.mediaPermissionDenied;
     }
@@ -3605,6 +3720,7 @@ function uiErrorMessage(reason: unknown, t: Translation): string {
 
 function messagePreview(message: ChatMessage | null, t: Translation) {
   if (!message) return t.noMessagesYet;
+  if (message.payload_format === "recalled_v0") return t.messageRecalledPreview;
   if (message.payload_format === "media_v0" || message.payload_format === "sticker_v0") {
     const media = parseMediaMessage(message.body);
     if (!media) return t.file;
@@ -3633,6 +3749,17 @@ function contactDisplayName(account: Account | undefined): string | undefined;
 function contactDisplayName(account: Account | undefined): string | undefined {
   if (!account) return undefined;
   return account.remark_name?.trim() || account.display_name;
+}
+
+function canRecallMessage(message: ChatMessage, activeAccountId: string): boolean {
+  if (
+    message.sender_account_id !== activeAccountId
+    || message.payload_format === "recalled_v0"
+  ) {
+    return false;
+  }
+  const createdAt = new Date(message.created_at).getTime();
+  return Number.isFinite(createdAt) && Date.now() - createdAt <= 120_000;
 }
 
 function initials(value: string): string {

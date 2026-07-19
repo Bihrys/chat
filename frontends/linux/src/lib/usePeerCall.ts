@@ -29,6 +29,7 @@ export function usePeerCall({
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(null);
   const [microphoneMuted, setMicrophoneMuted] = useState(false);
   const [cameraEnabled, setCameraEnabled] = useState(true);
+  const [cameraAvailable, setCameraAvailable] = useState<boolean | null>(null);
   const peerConnectionRef = useRef<RTCPeerConnection | null>(null);
   const pendingOfferRef = useRef<RTCSessionDescriptionInit | null>(null);
   const pendingIceRef = useRef<RTCIceCandidateInit[]>([]);
@@ -73,6 +74,33 @@ export function usePeerCall({
     if (!accessToken) cleanup();
   }, [accessToken, cleanup]);
 
+  useEffect(() => {
+    const mediaDevices = navigator.mediaDevices;
+    if (!mediaDevices?.enumerateDevices) {
+      setCameraAvailable(null);
+      return;
+    }
+
+    let cancelled = false;
+    const refreshDevices = async () => {
+      try {
+        const devices = await mediaDevices.enumerateDevices();
+        if (!cancelled) {
+          setCameraAvailable(devices.some((device) => device.kind === "videoinput"));
+        }
+      } catch {
+        if (!cancelled) setCameraAvailable(null);
+      }
+    };
+
+    void refreshDevices();
+    mediaDevices.addEventListener?.("devicechange", refreshDevices);
+    return () => {
+      cancelled = true;
+      mediaDevices.removeEventListener?.("devicechange", refreshDevices);
+    };
+  }, []);
+
   const signal = useCallback(
     async (
       current: PeerCallState,
@@ -102,7 +130,7 @@ export function usePeerCall({
 
   const buildPeerConnection = useCallback(
     (current: PeerCallState, stream: MediaStream) => {
-      const PeerConnection = resolvePeerConnectionConstructor();
+      const PeerConnection = resolvePeerConnectionConstructor(current.media);
       const pc = new PeerConnection({ iceServers: rtcIceServers() });
       stream.getTracks().forEach((track) => pc.addTrack(track, stream));
       pc.onicecandidate = (event) => {
@@ -133,16 +161,36 @@ export function usePeerCall({
 
   const acquireMedia = useCallback(async (media: CallMedia) => {
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new DOMException("Media capture is unavailable", "NotSupportedError");
+      throw new DOMException("media-capture-unavailable", "NotSupportedError");
     }
 
-    // WebKitGTK can reject ideal width/height objects as an invalid constraint.
-    // Let the engine choose its supported format instead.
-    return navigator.mediaDevices.getUserMedia({
-      audio: true,
-      video: media === "video",
-    });
-  }, []);
+    try {
+      if (media === "audio") {
+        // Audio calls never request a video track. A missing camera must not
+        // prevent a machine with a working microphone from making a call.
+        return await navigator.mediaDevices.getUserMedia({
+          audio: true,
+          video: false,
+        });
+      }
+
+      if (cameraAvailable === false) {
+        throw new DOMException("camera-device-not-found", "NotFoundError");
+      }
+      return await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: true,
+      });
+    } catch (reason) {
+      if (reason instanceof DOMException && reason.name === "NotFoundError") {
+        throw new DOMException(
+          media === "video" ? "camera-device-not-found" : "microphone-device-not-found",
+          "NotFoundError",
+        );
+      }
+      throw reason;
+    }
+  }, [cameraAvailable]);
 
   const armRingingTimeout = useCallback(
     (current: PeerCallState) => {
@@ -169,6 +217,7 @@ export function usePeerCall({
         phase: "outgoing",
       };
       try {
+        resolvePeerConnectionConstructor(media);
         const stream = await acquireMedia(media);
         setLocalStream(stream);
         setCall(current);
@@ -199,6 +248,7 @@ export function usePeerCall({
     const offer = pendingOfferRef.current;
     if (!current || current.phase !== "incoming" || !offer) return;
     try {
+      resolvePeerConnectionConstructor(current.media);
       const stream = await acquireMedia(current.media);
       setLocalStream(stream);
       setCall({ ...current, phase: "connecting" });
@@ -312,6 +362,7 @@ export function usePeerCall({
     remoteStream,
     microphoneMuted,
     cameraEnabled,
+    cameraAvailable,
     startCall,
     acceptCall,
     rejectCall,
@@ -342,13 +393,18 @@ type PeerConnectionConstructor = new (
   configuration?: RTCConfiguration,
 ) => RTCPeerConnection;
 
-function resolvePeerConnectionConstructor(): PeerConnectionConstructor {
+function resolvePeerConnectionConstructor(media: CallMedia): PeerConnectionConstructor {
   const scope = globalThis as typeof globalThis & {
     webkitRTCPeerConnection?: PeerConnectionConstructor;
   };
   const constructor = scope.RTCPeerConnection ?? scope.webkitRTCPeerConnection;
   if (!constructor) {
-    throw new DOMException("RTCPeerConnection is unavailable", "NotSupportedError");
+    throw new DOMException(
+      media === "audio"
+        ? "audio-webrtc-runtime-unavailable"
+        : "video-webrtc-runtime-unavailable",
+      "NotSupportedError",
+    );
   }
   return constructor;
 }

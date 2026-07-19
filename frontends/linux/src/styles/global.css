@@ -632,6 +632,44 @@ svg {
   justify-content: flex-end;
 }
 
+.message-recalled-row {
+  align-self: center;
+  max-width: min(80%, 520px);
+  padding: 4px 10px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--text-muted) 11%, transparent);
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+
+.message-context-menu {
+  position: fixed;
+  z-index: 360;
+  min-width: 116px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--card);
+  box-shadow: 0 12px 34px var(--shadow);
+}
+
+.message-context-menu button {
+  width: 100%;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.message-context-menu button:hover {
+  background: var(--list-hover);
+}
+
 .message-body-column {
   min-width: 0;
   max-width: min(72%, 680px);

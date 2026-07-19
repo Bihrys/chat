@@ -12,7 +12,12 @@ warn() {
     failures=$((failures + 1))
 }
 
+info() {
+    printf '  [info] %s\n' "$1"
+}
+
 echo "Linux WebRTC runtime check"
+missing_webrtc_plugins=0
 
 if command -v pkg-config >/dev/null 2>&1 && pkg-config --exists webkit2gtk-4.1; then
     version="$(pkg-config --modversion webkit2gtk-4.1)"
@@ -27,6 +32,7 @@ if command -v gst-inspect-1.0 >/dev/null 2>&1; then
             ok "GStreamer plugin ${plugin} is available"
         else
             warn "GStreamer plugin ${plugin} is missing"
+            missing_webrtc_plugins=1
         fi
     done
 
@@ -58,7 +64,22 @@ camera_nodes=(/dev/video*)
 if ((${#camera_nodes[@]} > 0)); then
     ok "Camera device nodes found: ${camera_nodes[*]}"
 else
-    warn "No /dev/video* camera device node was found"
+    info "No /dev/video* camera device was found; audio calls can still work, but video calls are unavailable"
+fi
+
+if ((missing_webrtc_plugins == 1)); then
+    echo
+    if command -v pacman >/dev/null 2>&1; then
+        echo "Install the missing Arch Linux WebRTC plugins with:"
+        echo "  sudo pacman -S --needed gst-plugins-bad"
+    elif command -v apt-get >/dev/null 2>&1; then
+        echo "Install the missing Debian/Ubuntu WebRTC plugins with:"
+        echo "  sudo apt-get install gstreamer1.0-plugins-bad"
+    elif command -v dnf >/dev/null 2>&1; then
+        echo "Install the missing Fedora WebRTC plugins with:"
+        echo "  sudo dnf install gstreamer1-plugins-bad-free gstreamer1-plugins-bad-freeworld"
+    fi
+    echo "Then verify with: gst-inspect-1.0 webrtcbin"
 fi
 
 if ((failures == 0)); then

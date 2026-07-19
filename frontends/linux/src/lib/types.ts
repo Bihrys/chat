@@ -41,7 +41,7 @@ export interface ChatMessage {
   conversation_id: string;
   sender_account_id: string;
   client_message_id: string;
-  payload_format: "plaintext_dev_v0" | "media_v0" | "sticker_v0" | "unknown";
+  payload_format: "plaintext_dev_v0" | "media_v0" | "sticker_v0" | "recalled_v0" | "unknown";
   body: string;
   created_at: string;
 }
@@ -159,6 +159,7 @@ export interface UiPreferences {
 export type ServerEvent =
   | { type: "connected"; payload: { account_id: string } }
   | { type: "message_created"; payload: { message: ChatMessage } }
+  | { type: "message_recalled"; payload: { message: ChatMessage } }
   | { type: "call_signal"; payload: { signal: CallSignal } }
   | {
       type: "conversation_read";
